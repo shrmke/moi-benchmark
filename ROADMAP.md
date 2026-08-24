@@ -11,12 +11,12 @@
 
 ## Astra
 
-当前状态：方案草稿待审阅，材料已归入 `astra/`。
+当前状态：阶段性评测与综合汇报已完成；正式 Track 方案审批、资产冻结和 Release 尚未完成。
 
 - [ ] 审阅并批准 Track 方案
 - [ ] 冻结任务、数据、系统、指标与 evaluator 版本
-- [ ] 建立可执行 Benchmark 资产
-- [ ] 完成试运行与结果复核
+- [X] 建立阶段性可执行 Benchmark 资产
+- [X] 完成阶段性运行与结果复核
 - [ ] 发布 Astra Track 报告
 - [ ] 建立持续回归
 
@@ -24,45 +24,45 @@
 
 ## Memoria
 
-当前状态：Track 骨架已建立，方案待创建。
+当前状态：LongMemEval-S、LoCoMo 与 Feature 阶段性评测已完成；正式 Track 方案、资产冻结和 Release 尚未完成。
 
 - [ ] 完成调研与方案审阅
 - [ ] 冻结任务、数据、系统、指标与 evaluator 版本
-- [ ] 建立可执行 Benchmark 资产
-- [ ] 完成试运行与结果复核
+- [X] 建立阶段性可执行 Benchmark 资产
+- [X] 完成阶段性运行与结果复核
 - [ ] 发布 Memoria Track 报告
 - [ ] 建立持续回归
 
 ## 文档解析
 
-当前状态：Track 骨架已建立，方案待创建。
+当前状态：OmniDocBench 与行业私有集阶段性评测已完成；正式 Track 方案、资产冻结和 Release 尚未完成。
 
 - [ ] 完成调研与方案审阅
 - [ ] 冻结任务、数据、系统、指标与 evaluator 版本
-- [ ] 建立可执行 Benchmark 资产
-- [ ] 完成试运行与结果复核
+- [X] 建立阶段性可执行 Benchmark 资产
+- [X] 完成阶段性运行与结果复核
 - [ ] 发布文档解析 Track 报告
 - [ ] 建立持续回归
 
 ## RAG
 
-当前状态：Track 骨架已建立，方案待创建。
+当前状态：公开集与企业私有集阶段性评测已完成；正式 Track 方案、资产冻结和 Release 尚未完成。
 
 - [ ] 完成调研与方案审阅
 - [ ] 冻结任务、数据、系统、指标与 evaluator 版本
-- [ ] 建立可执行 Benchmark 资产
-- [ ] 完成试运行与结果复核
+- [X] 建立阶段性可执行 Benchmark 资产
+- [X] 完成阶段性运行与结果复核
 - [ ] 发布 RAG Track 报告
 - [ ] 建立持续回归
 
 ## NLP2SQL
 
-当前状态：方案草稿待审阅，材料已归入 `nlp2sql/`。
+当前状态：Enron Eval 50 与 Spider Mix50 阶段性评测已完成；正式 Track 方案审批、资产冻结和 Release 尚未完成。
 
 - [ ] 审阅并批准 Track 方案
 - [ ] 冻结任务、数据、系统、指标与 evaluator 版本
-- [ ] 建立可执行 Benchmark 资产
-- [ ] 完成试运行与结果复核
+- [X] 建立阶段性可执行 Benchmark 资产
+- [X] 完成阶段性运行与结果复核
 - [ ] 发布 NLP2SQL Track 报告
 - [ ] 建立持续回归
 

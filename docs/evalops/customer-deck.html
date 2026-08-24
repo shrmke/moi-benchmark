@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MOI EvalOps｜企业 AI 的持续验证与质量运营平台</title>
+<style>
+:root{
+  --navy:#07172f;--navy2:#0b2346;--panel:#102b52;--line:#294a72;
+  --cyan:#39d4d2;--blue:#63a7ff;--green:#54d99f;--gold:#ffd166;
+  --text:#f3f7ff;--muted:#a9bdd8;--soft:#d9e7f8;
+}
+*{box-sizing:border-box}
+html{overflow-x:auto;background:#041022}
+body{margin:0;min-width:1600px;background:#041022;color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Arial,sans-serif}
+.deck{position:relative;width:1600px;margin:0 auto}
+.slide{display:none;position:relative;width:1600px;height:900px;overflow:hidden;background:linear-gradient(135deg,var(--navy) 0%,#091f40 56%,#0c2a52 100%);padding:58px 78px 54px}
+.slide.active{display:block}
+.slide.light{background:linear-gradient(135deg,#f7fbff 0%,#eef6ff 100%);color:#102541}
+.slide.light .muted{color:#55708f}.slide.light .card{background:#fff;border-color:#cfe0f3;box-shadow:0 10px 28px rgba(31,69,108,.08)}
+.slide.light .eyebrow{color:#157d8b}.slide.light h2{color:#0d284a}.slide.light .footer{color:#6b819b}
+.header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:30px}
+.eyebrow{font-size:15px;letter-spacing:2.6px;text-transform:uppercase;color:var(--cyan);font-weight:750;margin-bottom:10px}
+h1{font-size:66px;line-height:1.08;margin:0 0 22px;font-weight:820;letter-spacing:-1.6px;max-width:1230px}
+h2{font-size:42px;line-height:1.16;margin:0;font-weight:800;letter-spacing:-.7px}
+h3{font-size:25px;line-height:1.25;margin:0 0 10px;font-weight:760}
+p{font-size:20px;line-height:1.55;margin:0;color:var(--soft)}
+.muted{color:var(--muted)}
+.accent{color:var(--cyan)}
+.hero-sub{font-size:28px;line-height:1.5;color:#d7e7fb;max-width:1180px}
+.tags{display:flex;gap:12px;flex-wrap:wrap;margin-top:34px}.tag{padding:9px 16px;border:1px solid #3a5b7f;border-radius:999px;color:#d9e8fb;font-size:16px;background:#0c274c}
+.rule{width:130px;height:5px;background:linear-gradient(90deg,var(--cyan),var(--blue));margin:34px 0;border-radius:5px}
+.page-no{font-size:17px;color:#6f8baa;font-weight:700;letter-spacing:1px}
+.footer{position:absolute;left:78px;right:210px;bottom:25px;font-size:14px;color:#7891ae;display:flex;justify-content:space-between}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:24px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}.grid5{display:grid;grid-template-columns:repeat(5,1fr);gap:16px}
+.card{background:rgba(14,42,78,.86);border:1px solid var(--line);border-radius:18px;padding:24px}
+.card p{font-size:18px}.card strong{color:#fff}.light .card strong{color:#173354}
+.icon{width:42px;height:42px;border-radius:12px;background:#143f6d;color:var(--cyan);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;margin-bottom:16px}.light .icon{background:#e3f8f7;color:#147c83}
+ul{padding-left:24px;margin:8px 0 0}li{font-size:19px;line-height:1.48;color:#d7e5f7;margin:8px 0}.light li{color:#274663}
+.quote{border-left:5px solid var(--cyan);padding:20px 26px;background:rgba(57,212,210,.08);border-radius:0 16px 16px 0;font-size:28px;line-height:1.45;font-weight:650;color:#e8fbff}
+.flow{display:flex;align-items:center;gap:10px;margin:28px 0 34px}.node{flex:1;padding:18px 12px;text-align:center;border:1px solid #31577e;border-radius:14px;background:#0d2b52;font-size:17px;font-weight:700}.arrow{font-size:25px;color:var(--cyan)}
+.domain{min-height:250px;padding:20px}.domain h3{font-size:21px}.domain p{font-size:16px;line-height:1.48}
+.arch{display:grid;grid-template-rows:auto auto auto auto;gap:15px}.arch-row{display:grid;gap:14px}.arch-row.five{grid-template-columns:repeat(5,1fr)}.arch-row.four{grid-template-columns:repeat(4,1fr)}.arch-box{padding:17px;border:1px solid #34597e;border-radius:13px;background:#0d2a4f;text-align:center;font-size:17px;font-weight:680}.arch-main{background:linear-gradient(90deg,#0e4d62,#164d87);border-color:#4fc6cb;font-size:20px}
+.big-q{font-size:34px;font-weight:800;color:#fff;margin-bottom:20px}.answer{font-size:22px;line-height:1.48;padding:16px 20px;border-left:4px solid var(--blue);background:#0b294e;border-radius:0 12px 12px 0;margin:12px 0;color:#d8e9fd}
+.metric{padding:24px;min-height:265px}.metric .value{font-size:48px;line-height:1;color:var(--cyan);font-weight:850;margin:14px 0}.metric .delta{font-size:20px;color:var(--green);font-weight:750}.metric small{display:block;color:#9db3cd;font-size:14px;line-height:1.42;margin-top:14px}
+.pack{min-height:300px}.pack .badge{display:inline-block;color:#09213c;background:var(--cyan);font-weight:800;border-radius:7px;padding:5px 10px;margin-bottom:18px}.pack .deliver{margin-top:18px;padding-top:15px;border-top:1px solid #2c4d72;color:#bcd1e9;font-size:16px;line-height:1.45}
+.pipeline{display:flex;align-items:stretch;gap:12px;margin-top:35px}.pipe-card{flex:1;padding:22px 14px;border-radius:15px;border:1px solid #2c527b;background:#0e2a50;text-align:center}.pipe-card b{display:block;font-size:20px;margin-bottom:8px}.pipe-card span{font-size:15px;color:#abc1da}.pipe-arrow{display:flex;align-items:center;color:var(--cyan);font-size:25px}
+.table{width:100%;border-collapse:collapse;font-size:18px}.table th{text-align:left;padding:14px 15px;background:#dfeefb;color:#173a5b;border-bottom:2px solid #b5d2eb}.table td{padding:14px 15px;border-bottom:1px solid #d4e2ef;color:#284967;vertical-align:top}.table td:first-child{font-weight:760;color:#173553}
+.timeline{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:34px}.phase{min-height:360px}.phase .phase-label{font-size:15px;color:var(--cyan);letter-spacing:1.3px;font-weight:800}.phase h3{margin:10px 0 14px}.phase li{font-size:17px}
+.why{min-height:225px}.why p{font-size:17px}
+.cta{display:grid;grid-template-columns:1.1fr .9fr;gap:40px;align-items:center;height:650px}.steps{display:grid;gap:15px}.step{display:flex;align-items:center;gap:18px;padding:18px 20px;background:#0d2a4f;border:1px solid #2d5279;border-radius:15px}.step b{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--cyan);color:#06203c;font-size:18px}.step span{font-size:20px;font-weight:650}
+.controls{position:absolute;right:22px;top:820px;z-index:10;display:flex;gap:8px}.controls button{border:1px solid #557292;background:#0a213e;color:#fff;border-radius:9px;padding:10px 15px;font-size:15px;cursor:pointer}.controls button:hover{background:#14365f}
+@page{size:1600px 900px;margin:0}
+@media print{html,body{background:#fff;min-width:0;margin:0}.deck{width:1600px}.slide{display:block!important;page-break-after:always;break-after:page}.controls{display:none}}
+</style>
+</head>
+<body>
+<div class="deck">
+
+<section class="slide active" data-title="封面">
+  <div style="margin-top:120px">
+    <div class="eyebrow">MOI EVALOPS</div>
+    <h1>企业 AI 的持续验证<br>与质量运营平台</h1>
+    <div class="rule"></div>
+    <div class="hero-sub">让 Document、RAG、NL2SQL、Memory 与 Agent<br>从“可以演示”走向“可验收、可追溯、可持续改进”</div>
+    <div class="tags"><span class="tag">业务验收</span><span class="tag">持续评测</span><span class="tag">质量门禁</span><span class="tag">证据审计</span><span class="tag">私有化运行</span></div>
+  </div>
+  <div class="footer"><span>MOI EvalOps</span><span>01 / 14</span></div>
+</section>
+
+<section class="slide" data-title="为什么需要">
+  <div class="header"><div><div class="eyebrow">01 · WHY EVALOPS</div><h2>企业 AI 的挑战，正从“构建能力”转向“持续证明能力”</h2></div><div class="page-no">02</div></div>
+  <div class="grid2" style="margin-top:35px">
+    <div class="card"><div class="icon">01</div><h3>效果难定义</h3><p>不同业务对“正确”的定义不同，通用榜单无法替代客户验收。</p></div>
+    <div class="card"><div class="icon">02</div><h3>结果难复现</h3><p>模型、Prompt、数据和平台持续变化，同一问题可能得到不同结果。</p></div>
+    <div class="card"><div class="icon">03</div><h3>失败难定位</h3><p>解析、检索、语义、Agent 编排和工具执行相互影响，单一总分无法说明根因。</p></div>
+    <div class="card"><div class="icon">04</div><h3>质量难持续</h3><p>POC 有效果，不等于每次升级都能保持效果；人工抽查也无法覆盖长尾风险。</p></div>
+  </div>
+  <div class="quote" style="margin-top:30px">企业需要的不是“再跑一次分”，而是每次升级都能被验证的质量闭环。</div>
+  <div class="footer"><span>MOI EvalOps</span><span>02 / 14</span></div>
+</section>
+
+<section class="slide" data-title="愿景">
+  <div class="header"><div><div class="eyebrow">02 · VISION</div><h2>让每一个 AI 能力都有可执行的验收标准</h2></div><div class="page-no">03</div></div>
+  <div class="flow"><div class="node">业务目标</div><div class="arrow">→</div><div class="node">场景与 Golden</div><div class="arrow">→</div><div class="node">自动运行</div><div class="arrow">→</div><div class="node">多维评测</div><div class="arrow">→</div><div class="node">失败归因</div><div class="arrow">→</div><div class="node">发布门禁</div><div class="arrow">→</div><div class="node">持续回归</div></div>
+  <div class="grid3">
+    <div class="card" style="min-height:260px"><div class="icon">验</div><h3>可验收</h3><p>把业务语言转化为数据集、Golden、指标和通过条件。</p></div>
+    <div class="card" style="min-height:260px"><div class="icon">溯</div><h3>可追溯</h3><p>每个结果追溯到数据、模型、配置、版本与原始证据。</p></div>
+    <div class="card" style="min-height:260px"><div class="icon">续</div><h3>可持续</h3><p>历史 badcase 自动进入回归资产，阻止同类问题再次进入生产。</p></div>
+  </div>
+  <div class="footer"><span>MOI EvalOps</span><span>03 / 14</span></div>
+</section>
+
+<section class="slide light" data-title="定义">
+  <div class="header"><div><div class="eyebrow">03 · DEFINITION</div><h2>EvalOps 是企业 AI 全生命周期的质量工程体系</h2></div><div class="page-no">04</div></div>
+  <table class="table" style="margin-top:20px">
+    <thead><tr><th style="width:20%">组成</th><th style="width:38%">核心内容</th><th>客户价值</th></tr></thead>
+    <tbody>
+      <tr><td>方法论</td><td>场景拆解、指标设计、Golden 规范、可比性规则</td><td>“测什么、怎么算”有统一口径</td></tr>
+      <tr><td>评测资产</td><td>数据集、任务、Golden、badcase、基线、行业模板</td><td>项目经验持续沉淀与复用</td></tr>
+      <tr><td>工具平台</td><td>自动运行、评测、对比、门禁、报告、证据导出</td><td>降低重复测试和人工分析成本</td></tr>
+      <tr><td>运营机制</td><td>版本回归、失败复盘、质量看板、发布策略</td><td>把质量管理变成持续过程</td></tr>
+      <tr><td>AI Copilot</td><td>Golden 辅助生成、用例扩展、错误聚类、报告生成</td><td>加速资产建设与问题定位</td></tr>
+    </tbody>
+  </table>
+  <div style="margin-top:32px;padding:22px 28px;border-radius:15px;background:#dff7f5;color:#124b57;font-size:26px;font-weight:760">EvalOps 不是一次跑分，而是一套持续运转的 AI 质量操作系统。</div>
+  <div class="footer"><span>MOI EvalOps</span><span>04 / 14</span></div>
+</section>
+
+<section class="slide" data-title="五大能力域">
+  <div class="header"><div><div class="eyebrow">04 · COVERAGE</div><h2>覆盖企业 AI 的五大能力域</h2></div><div class="page-no">05</div></div>
+  <div class="grid5" style="margin-top:30px">
+    <div class="card domain"><div class="icon">D</div><h3>Document</h3><p>文本、标题、表格、公式、图片、阅读顺序、版面与 Excel 专项。</p></div>
+    <div class="card domain"><div class="icon">R</div><h3>RAG</h3><p>检索命中、证据覆盖、忠实度、完整性、引用与拒答。</p></div>
+    <div class="card domain"><div class="icon">S</div><h3>NL2SQL</h3><p>Schema 理解、SQL 生成、执行结果、业务语义、稳定性与时延。</p></div>
+    <div class="card domain"><div class="icon">M</div><h3>Memory</h3><p>写入、检索、更新、版本、分支、回滚、治理与长期记忆。</p></div>
+    <div class="card domain"><div class="icon">A</div><h3>Agent</h3><p>任务完成、工具调用、轨迹、预算、超时、恢复与安全边界。</p></div>
+  </div>
+  <div class="quote" style="margin-top:34px">统一原则：优先验证真实任务结果，而不是只让另一个大模型判断“看起来是否正确”。</div>
+  <div class="footer"><span>MOI EvalOps</span><span>05 / 14</span></div>
+</section>
+
+<section class="slide" data-title="架构">
+  <div class="header"><div><div class="eyebrow">05 · ARCHITECTURE</div><h2>MOI EvalOps 能力架构</h2></div><div class="page-no">06</div></div>
+  <div class="arch" style="margin-top:25px">
+    <div class="arch-box arch-main">质量控制平面｜资产目录 · 运行编排 · Baseline · 版本对比 · 发布门禁 · Evidence Bundle</div>
+    <div class="arch-row five">
+      <div class="arch-box">Document Evaluator</div><div class="arch-box">RAG Evaluator</div><div class="arch-box">NL2SQL Evaluator</div><div class="arch-box">Memory Evaluator</div><div class="arch-box">Agent Verifier</div>
+    </div>
+    <div class="arch-row four">
+      <div class="arch-box">MOI 原生接入</div><div class="arch-box">第三方 Adapter</div><div class="arch-box">在线 API</div><div class="arch-box">离线结果</div>
+    </div>
+    <div class="arch-box arch-main">AI Copilot｜数据理解 · Golden 草拟 · 用例扩展 · 错误聚类 · 根因建议 · 证据化报告</div>
+  </div>
+  <div class="grid3" style="margin-top:28px"><div class="card"><h3>统一 Contract</h3><p>不同领域保留专业指标，共用资产、运行和证据契约。</p></div><div class="card"><h3>全链路观测</h3><p>连接输入、Trace、工具调用、中间证据和最终结果。</p></div><div class="card"><h3>私有化运行</h3><p>支持客户数据在受控环境中完成验证与证据导出。</p></div></div>
+  <div class="footer"><span>MOI EvalOps</span><span>06 / 14</span></div>
+</section>
+
+<section class="slide" data-title="诊断">
+  <div class="header"><div><div class="eyebrow">06 · ACTIONABLE DIAGNOSIS</div><h2>从“一个总分”升级为“可行动的诊断”</h2></div><div class="page-no">07</div></div>
+  <div class="grid2" style="margin-top:30px;grid-template-columns:.7fr 1.3fr">
+    <div class="card" style="display:flex;flex-direction:column;justify-content:center;min-height:535px"><div class="muted" style="font-size:18px">传统评测通常只能回答</div><div style="font-size:56px;line-height:1.2;font-weight:850;margin-top:20px">得了<br><span class="accent">多少分？</span></div></div>
+    <div>
+      <div class="answer">哪个场景、哪类数据、哪一步开始退化？</div>
+      <div class="answer">问题来自模型、业务语义、检索、解析还是 Agent 编排？</div>
+      <div class="answer">新版本改进了什么，又引入了什么？</div>
+      <div class="answer">是否满足发布条件，结论能否重新验证？</div>
+    </div>
+  </div>
+  <div class="quote" style="margin-top:25px">评测的终点不是报告，而是下一步可执行的优化决策。</div>
+  <div class="footer"><span>MOI EvalOps</span><span>07 / 14</span></div>
+</section>
+
+<section class="slide" data-title="证据">
+  <div class="header"><div><div class="eyebrow">07 · VERIFIED EVIDENCE</div><h2>阶段性评测证据与系统价值</h2></div><div class="page-no">08</div></div>
+  <div class="grid3" style="margin-top:30px">
+    <div class="card metric"><h3>业务语义可量化</h3><div class="value">+20 pp</div><div class="delta">口语化业务问题严格正确率</div><p style="margin-top:14px">62.67% → 82.67%<br>全量严格正确率 76.67% → 86.67%<br>Enron Eval 50 · 50 题 × 3 轮</p></div>
+    <div class="card metric"><h3>复杂企业文档</h3><div class="value">42 / 50</div><div class="delta">本次三方对比中取得最高结果</div><p style="margin-top:14px">0 个有效解析失败<br>长文档、Office、跨页表格与公式</p></div>
+    <div class="card metric"><h3>可治理长期记忆</h3><div class="value">91.80%</div><div class="delta">LongMemEval-S 本地评测</div><p style="margin-top:14px">459/500 · 500 题<br>快照回滚 50/50 · 低置信治理 50/50<br>分支、Diff 与 Merge 48/50</p></div>
+  </div>
+  <div style="margin-top:30px;color:#96acc5;font-size:15px;line-height:1.45">证据索引：Enron Eval 50、复杂制造业文档私有集、LongMemEval-S、Memoria Feature 自建集。结果仅代表固定版本与相应测试集；详细 Run/Report 可按项目提供。</div>
+  <div class="footer"><span>MOI EvalOps</span><span>08 / 14</span></div>
+</section>
+
+<section class="slide" data-title="交付方案">
+  <div class="header"><div><div class="eyebrow">08 · DELIVERY PACKAGES</div><h2>面向客户的三类交付方案</h2></div><div class="page-no">09</div></div>
+  <div class="grid3" style="margin-top:34px">
+    <div class="card pack"><div class="badge">A</div><h3>AI 能力验收</h3><p>适用于 POC、产品选型和项目交付。</p><div class="deliver">场景清单 · 测试集 · Golden · 指标口径 · 运行结果 · 验收报告</div></div>
+    <div class="card pack"><div class="badge">B</div><h3>持续质量回归</h3><p>适用于模型、Prompt、知识库或产品频繁升级的生产系统。</p><div class="deliver">Baseline · 自动回归 · 趋势分析 · 退化告警 · 发布门禁</div></div>
+    <div class="card pack"><div class="badge">C</div><h3>AI 质量运营</h3><p>适用于多应用、多团队和多模型的企业级 AI 平台。</p><div class="deliver">统一资产目录 · 质量看板 · 问题闭环 · Evidence Bundle · 周期报告</div></div>
+  </div>
+  <div class="quote" style="margin-top:34px">从售前验证到生产运营，使用同一套数据、指标、证据和质量语言。</div>
+  <div class="footer"><span>MOI EvalOps</span><span>09 / 14</span></div>
+</section>
+
+<section class="slide" data-title="场景包">
+  <div class="header"><div><div class="eyebrow">09 · QUICK START</div><h2>三个可快速启动的场景包</h2></div><div class="page-no">10</div></div>
+  <div class="grid3" style="margin-top:30px">
+    <div class="card pack"><div class="icon">文</div><h3>企业文档与知识问答</h3><p>文档 → 解析 → 索引 → 检索 → 回答 → 引用验收</p><div class="deliver">重点：复杂格式、证据覆盖、忠实度与可追溯引用</div></div>
+    <div class="card pack"><div class="icon">数</div><h3>业务数据库智能问数</h3><p>自然语言 → 语义理解 → SQL → 执行 → 结果集验收</p><div class="deliver">重点：业务术语、执行正确率、复杂查询、稳定性与时延</div></div>
+    <div class="card pack"><div class="icon">智</div><h3>企业 Agent 任务执行</h3><p>任务 → 计划 → 工具调用 → 执行轨迹 → 结果验收</p><div class="deliver">重点：完成率、预算、超时、失败恢复与安全边界</div></div>
+  </div>
+  <div class="pipeline"><div class="pipe-card"><b>第 1 步</b><span>对齐业务目标</span></div><div class="pipe-arrow">→</div><div class="pipe-card"><b>第 2 步</b><span>建立 Golden</span></div><div class="pipe-arrow">→</div><div class="pipe-card"><b>第 3 步</b><span>运行与诊断</span></div><div class="pipe-arrow">→</div><div class="pipe-card"><b>第 4 步</b><span>形成持续回归</span></div></div>
+  <div class="footer"><span>MOI EvalOps</span><span>10 / 14</span></div>
+</section>
+
+<section class="slide light" data-title="可信评测">
+  <div class="header"><div><div class="eyebrow">10 · TRUST & EVIDENCE</div><h2>一套可信、可复现的评测过程</h2></div><div class="page-no">11</div></div>
+  <div class="grid2" style="margin-top:25px">
+    <div class="card"><h3>标准化 Run 固化</h3><ul><li>Dataset / Task / Golden 版本</li><li>系统、模型、Provider 与 Prompt</li><li>配置、环境、Evaluator 与聚合算法</li><li>逐题结果、失败分类和原始工件</li><li>性能、Token、关键轨迹与运行时间</li></ul></div>
+    <div class="card"><h3>Evidence Bundle</h3><ul><li>运行摘要与版本清单</li><li>逐题证据和失败分类</li><li>原始产物索引与 Hash</li><li>脱敏后的客户审计报告</li><li>可由客户或第三方复核</li></ul></div>
+  </div>
+  <div style="margin-top:28px;padding:24px 28px;border-radius:16px;background:#dff7f5;color:#17485a"><h3 style="margin-bottom:8px">可比性保护</h3><div style="font-size:20px;line-height:1.5">当数据、维度、权重、格式或聚合口径不一致时，不直接生成具有误导性的单值差异。</div></div>
+  <div class="footer"><span>MOI EvalOps</span><span>11 / 14</span></div>
+</section>
+
+<section class="slide" data-title="路线图">
+  <div class="header"><div><div class="eyebrow">11 · ROADMAP</div><h2>从统一评测走向企业 AI 质量运营</h2></div><div class="page-no">12</div></div>
+  <div class="timeline">
+    <div class="card phase"><div class="phase-label">CURRENT</div><h3>评测资产与项目交付</h3><ul><li>五域方法与评测资产</li><li>私有数据集与 Golden</li><li>在线与离线接入</li><li>逐题诊断与版本对比</li><li>证据化评测报告</li></ul></div>
+    <div class="card phase"><div class="phase-label">NEXT</div><h3>持续质量门禁</h3><ul><li>标准化 Run / Baseline / Gate</li><li>Evidence Bundle 自动生成</li><li>CI/CD 与定时回归</li><li>P95/P99、成本与安全门禁</li><li>生产 badcase 自动回流</li></ul></div>
+    <div class="card phase"><div class="phase-label">EVOLVE</div><h3>企业质量运营平台</h3><ul><li>多项目质量看板</li><li>行业 Starter Kit</li><li>AI Golden 与测试生成</li><li>客户见证运行</li><li>第三方复核机制</li></ul></div>
+  </div>
+  <div style="margin-top:22px;color:#96acc5;font-size:15px">当前能力按项目范围接入；标准化 Gate、Evidence Bundle 自动化与控制台按路线推进。</div>
+  <div class="footer"><span>MOI EvalOps</span><span>12 / 14</span></div>
+</section>
+
+<section class="slide" data-title="为什么 MOI">
+  <div class="header"><div><div class="eyebrow">12 · WHY MOI</div><h2>为什么选择 MOI</h2></div><div class="page-no">13</div></div>
+  <div class="grid2" style="margin-top:30px">
+    <div class="card why"><div class="icon">链</div><h3>验证真实产品链路</h3><p>覆盖解析、检索、语义层、Agent 编排、工具执行与最终结果。</p></div>
+    <div class="card why"><div class="icon">证</div><h3>给出证据与根因</h3><p>结果可回溯到样本、步骤、配置、版本和原始工件。</p></div>
+    <div class="card why"><div class="icon">资</div><h3>沉淀持续质量资产</h3><p>每次项目、升级和生产问题都会转化为新的回归能力。</p></div>
+    <div class="card why"><div class="icon">验</div><h3>行业可执行验收</h3><p>把客户业务规则转化为 Golden、Verifier 和发布门禁。</p></div>
+  </div>
+  <div class="quote" style="margin-top:28px">让企业 AI 的每一次升级，都建立在可验证的进步之上。</div>
+  <div class="footer"><span>MOI EvalOps</span><span>13 / 14</span></div>
+</section>
+
+<section class="slide" data-title="开始">
+  <div class="cta">
+    <div><div class="eyebrow">START WITH ONE REAL SCENARIO</div><h1 style="font-size:56px">从一个真实场景<br>建立首个质量基线</h1><div class="rule"></div><p style="font-size:24px">选择一个高价值 AI 场景，快速形成可验收、可诊断、可持续回归的质量闭环。</p></div>
+    <div class="steps"><div class="step"><b>1</b><span>对齐业务目标和验收口径</span></div><div class="step"><b>2</b><span>建立代表性数据集与 Golden</span></div><div class="step"><b>3</b><span>完成 Baseline 运行与问题诊断</span></div><div class="step"><b>4</b><span>形成优化建议与持续回归机制</span></div></div>
+  </div>
+  <div style="position:absolute;left:78px;bottom:80px;font-size:27px;font-weight:800;color:var(--cyan)">MOI EvalOps</div>
+  <div class="footer"><span>可验收 · 可追溯 · 可持续改进</span><span>14 / 14</span></div>
+</section>
+
+<div class="controls"><button id="prev">← 上一页</button><button id="next">下一页 →</button></div>
+</div>
+<script>
+const slides=[...document.querySelectorAll('.slide')];
+let current=0;
+const params=new URLSearchParams(location.search);
+const requested=Number(params.get('s'));
+if(Number.isInteger(requested)) current=Math.max(0,Math.min(slides.length-1,requested-1));
+function show(i){slides.forEach(s=>s.classList.remove('active'));current=(i+slides.length)%slides.length;slides[current].classList.add('active');history.replaceState(null,'','?s='+(current+1));document.title=slides[current].dataset.title+'｜MOI EvalOps'}
+document.getElementById('prev').onclick=()=>show(current-1);
+document.getElementById('next').onclick=()=>show(current+1);
+document.addEventListener('keydown',e=>{if(['ArrowRight','PageDown',' '].includes(e.key)){e.preventDefault();show(current+1)}if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();show(current-1)}if(e.key==='Home')show(0);if(e.key==='End')show(slides.length-1)});
+show(current);
+</script>
+</body>
+</html>
