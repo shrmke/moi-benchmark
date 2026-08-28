@@ -5,6 +5,7 @@ dataset_version: "moi-rag-bench-v0.3.1"
 date: "2026-08-28"
 audience: "technical"
 status: "final"
+provenance: "MOI_rag_benchmark_v2.0.provenance.json"
 ---
 
 # MOI RAG Benchmark Report v2.0：混合文档语料上的四平台证据链与系统接口交付能力评测
@@ -16,6 +17,7 @@ status: "final"
 > 评测快照：2026-08-28
 > 与 v1.0 的关系：两者为并行 Benchmark；v1.0 以公开数据集表现为重点，v2.0 使用收集、筛选并合并构建的混合数据集。
 > 复现状态：数据、运行账本、聚合结果与 Judge 恢复记录均已在本地落盘。
+> 可审计快照：[MOI_rag_benchmark_v2.0.provenance.json](MOI_rag_benchmark_v2.0.provenance.json)
 
 ## TL;DR
 
@@ -492,6 +494,7 @@ MOI RAG Benchmark Report v2.0 与 v1.0 构成两条并行研究线：v1.0 主要
 
 <!--
 Source inventory (kept out of the rendered narrative):
+- Committed provenance snapshot: results/reports/MOI_rag_benchmark_v2.0.provenance.json
 - Dataset construction summary: datasets/moi-rag-bench-v0.3.1-qa-revision/qa-revision-summary.json
 - Dataset validation: datasets/moi-rag-bench-v0.3.1-qa-revision/validation.json
 - Ready package: datasets/moi-rag-bench-v0.3.1-qa-revision/ready_for_eval
