@@ -27,6 +27,10 @@ datasets/
 tests/benchmarks/__pycache__/
 # benchmarks/
 tests/
+!local-rag-platforms/tests/
+local-rag-platforms/tests/*
+!local-rag-platforms/tests/test_competitor_eval_judge.py
+!local-rag-platforms/tests/test_competitor_eval_metrics.py
 # local-rag-platforms/
 
 # Large generated benchmark payloads (>10 MB) stay local; smaller JSON/JSONL
@@ -34,3 +38,6 @@ tests/
 /results/metrics/*/judge-input.jsonl
 /results/metrics/*/results.jsonl
 docs/refs/
+
+results/.cache/
+plans
