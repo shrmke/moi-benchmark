@@ -1,0 +1,19 @@
+jobs_dir: "work/dsh-install-smoke-jobs"
+n_concurrent_trials: 1
+environment:
+  type: docker
+agents:
+  - name: astra.runners.dsh_terminal_bench.agent:DshTerminalBenchC0Agent
+    model_name: "deepseek-official/deepseek-v4-flash"
+    env:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+    kwargs:
+      version: 0.1.0rc6
+      profile: deepseek-native
+      turn_timeout_sec: 1800
+      trigger_timeout_sec: 1800
+      poll_interval_sec: 0.5
+datasets:
+  - path: "work/terminal-bench-2-1/tasks"
+    task_names:
+      - modernize-scientific-stack

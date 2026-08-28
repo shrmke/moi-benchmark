@@ -1,0 +1,103 @@
+jobs_dir: "work/dsh-c0-terminalbench-83-glm52-jobs"
+n_concurrent_trials: 1
+timeout_multiplier: 2.0
+agent_timeout_multiplier: 2.25
+environment:
+  type: docker
+agents:
+  - name: astra.runners.dsh_terminal_bench.agent:DshTerminalBenchC0Agent
+    model_name: "zai/glm-5.2"
+    env:
+      ZAI_API_KEY: ${ZAI_API_KEY}
+    kwargs:
+      version: 0.1.0rc6
+      profile: terminalbench-glm52
+      turn_timeout_sec: 24000
+      trigger_timeout_sec: 24000
+      poll_interval_sec: 0.5
+datasets:
+  - path: "work/terminal-bench-2-1/tasks"
+    task_names:
+      - adaptive-rejection-sampler
+      - bn-fit-modify
+      - break-filter-js-from-html
+      - build-cython-ext
+      - build-pmars
+      - build-pov-ray
+      - caffe-cifar-10
+      - cancel-async-tasks
+      - chess-best-move
+      - circuit-fibsqrt
+      - cobol-modernization
+      - code-from-image
+      - compile-compcert
+      - configure-git-webserver
+      - constraints-scheduling
+      - count-dataset-tokens
+      - crack-7z-hash
+      - custom-memory-heap-crash
+      - db-wal-recovery
+      - distribution-search
+      - dna-assembly
+      - dna-insert
+      - extract-elf
+      - extract-moves-from-video
+      - feal-differential-cryptanalysis
+      - feal-linear-cryptanalysis
+      - filter-js-from-html
+      - financial-document-processor
+      - fix-code-vulnerability
+      - fix-git
+      - fix-ocaml-gc
+      - gcode-to-text
+      - git-leak-recovery
+      - git-multibranch
+      - gpt2-codegolf
+      - headless-terminal
+      - hf-model-inference
+      - install-windows-3.11
+      - kv-store-grpc
+      - large-scale-text-editing
+      - largest-eigenval
+      - llm-inference-batching-scheduler
+      - log-summary-date-ranges
+      - mailman
+      - make-doom-for-mips
+      - make-mips-interpreter
+      - mcmc-sampling-stan
+      - merge-diff-arc-agi-task
+      - model-extraction-relu-logits
+      - modernize-scientific-stack
+      - mteb-leaderboard
+      - mteb-retrieve
+      - multi-source-data-merger
+      - nginx-request-logging
+      - openssl-selfsigned-cert
+      - overfull-hbox
+      - password-recovery
+      - path-tracing
+      - polyglot-c-py
+      - polyglot-rust-c
+      - portfolio-optimization
+      - protein-assembly
+      - prove-plus-comm
+      - pypi-server
+      - pytorch-model-cli
+      - pytorch-model-recovery
+      - qemu-alpine-ssh
+      - qemu-startup
+      - query-optimize
+      - raman-fitting
+      - regex-chess
+      - regex-log
+      - reshard-c4-data
+      - rstan-to-pystan
+      - sanitize-git-repo
+      - schemelike-metacircular-eval
+      - sparql-university
+      - sqlite-db-truncate
+      - sqlite-with-gcov
+      - video-processing
+      - vulnerable-secret
+      - winning-avg-corewars
+      - write-compressor

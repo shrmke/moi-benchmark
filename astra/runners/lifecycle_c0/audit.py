@@ -20,6 +20,9 @@ from astra.runners.pi_terminal_bench.events import (
     validate_event_stream as validate_pi_event_stream,
     validate_session as validate_pi_session,
 )
+from astra.runners.dsh_terminal_bench.events import (
+    validate_event_stream as validate_dsh_event_stream,
+)
 
 from .core import LifecycleControllerError, parse_process_cleanup_report
 
@@ -1186,6 +1189,120 @@ def _validate_pi_trajectory(
     }
 
 
+def _validate_dsh_trajectory(
+    result_path: Path,
+    metadata: dict[str, Any],
+    started: dict[str, Any],
+    completed: dict[str, Any],
+) -> dict[str, Any] | None:
+    if started.get("product") != "dsh":
+        return None
+    if (
+        started.get("trajectory_capture_required") is not True
+        or started.get("trajectory_capture_mode")
+        != "dsh_jsonrpc_event_stream"
+        or metadata.get("trajectory_capture_path")
+        != "agent/dsh-events.jsonl"
+    ):
+        raise AuditError("DSH required trajectory capture is not armed")
+    blocking = _same(
+        "trajectory_capture_blocking",
+        [
+            metadata.get("trajectory_capture_blocking"),
+            started.get("trajectory_capture_blocking"),
+            completed.get("trajectory_capture_blocking"),
+        ],
+    )
+    if blocking is not False:
+        raise AuditError("DSH trajectory capture is incorrectly blocking")
+    status = _same(
+        "dsh_trajectory_status",
+        [
+            metadata.get("dsh_trajectory_status"),
+            completed.get("dsh_trajectory_status"),
+        ],
+    )
+    trajectory_sha256 = _same(
+        "dsh_trajectory_sha256",
+        [
+            metadata.get("dsh_trajectory_sha256"),
+            completed.get("dsh_trajectory_sha256"),
+        ],
+    )
+    session_id = _same(
+        "dsh_session_id",
+        [metadata.get("dsh_session_id"), completed.get("dsh_session_id")],
+    )
+    event_count = _same(
+        "dsh_event_count",
+        [metadata.get("dsh_event_count"), completed.get("dsh_event_count")],
+    )
+    finish_reason = _same(
+        "dsh_finish_reason",
+        [
+            metadata.get("dsh_finish_reason"),
+            completed.get("dsh_finish_reason"),
+        ],
+    )
+    if status == "missing":
+        if (
+            trajectory_sha256 is not None
+            or session_id is not None
+            or finish_reason is not None
+            or event_count != 0
+        ):
+            raise AuditError("missing DSH trajectory has inconsistent metadata")
+        return {
+            "path": None,
+            "status": "missing",
+            "complete": False,
+            "blocking": False,
+        }
+    if status != "saved":
+        raise AuditError("DSH trajectory status is invalid")
+    if not isinstance(session_id, str) or not session_id:
+        raise AuditError("saved DSH trajectory has no session ID")
+    if type(event_count) is not int or event_count <= 0:
+        raise AuditError("saved DSH trajectory has an invalid event count")
+    trajectory_sha256 = _require_sha256(
+        trajectory_sha256, "dsh_trajectory_sha256"
+    )
+    trajectory_path = result_path.parent / "agent" / "dsh-events.jsonl"
+    try:
+        summary = validate_dsh_event_stream(
+            trajectory_path,
+            session_id=session_id,
+            max_turns=metadata.get("dsh_max_turns"),
+        )
+    except RuntimeError as exc:
+        raise AuditError(f"invalid DSH trajectory: {exc}") from exc
+    driver_result = _load_json(
+        result_path.parent / "agent" / "dsh-run.json"
+    )
+    if (
+        driver_result.get("schema_version") != 1
+        or driver_result.get("status") != "completed"
+        or driver_result.get("session_id") != session_id
+        or driver_result.get("event_count") != event_count
+        or driver_result.get("finish_reason") != finish_reason
+        or summary["sha256"] != trajectory_sha256
+        or summary["event_count"] != event_count
+        or summary["finish_reason"] != finish_reason
+    ):
+        raise AuditError("DSH trajectory evidence is internally inconsistent")
+    return {
+        "path": str(trajectory_path),
+        "status": "saved",
+        "complete": True,
+        "blocking": False,
+        "sha256": trajectory_sha256,
+        "session_id": session_id,
+        "event_count": event_count,
+        "wire_message_count": summary["wire_message_count"],
+        "finish_reason": finish_reason,
+    }
+
+
 def audit_trial(result_path: Path) -> dict[str, Any]:
     """Audit one persisted Harbor C0 trial without executing the product."""
 
@@ -1313,6 +1430,12 @@ def audit_trial(result_path: Path) -> dict[str, Any]:
         product_terminal_status,
     )
     pi_trajectory = _validate_pi_trajectory(
+        result_path,
+        metadata,
+        started,
+        completed,
+    )
+    dsh_trajectory = _validate_dsh_trajectory(
         result_path,
         metadata,
         started,
@@ -1529,6 +1652,7 @@ def audit_trial(result_path: Path) -> dict[str, Any]:
             "trajectory": astra_trajectory,
             "managed_policy": managed_policy,
             "pi_trajectory": pi_trajectory,
+            "dsh_trajectory": dsh_trajectory,
         },
         "trigger": {
             "status": trigger_status,

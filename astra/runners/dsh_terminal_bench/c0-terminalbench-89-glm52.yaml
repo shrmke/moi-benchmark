@@ -1,0 +1,21 @@
+jobs_dir: "work/dsh-c0-terminalbench-89-glm52-jobs"
+n_concurrent_trials: 1
+timeout_multiplier: 2.0
+agent_timeout_multiplier: 2.25
+environment:
+  type: docker
+agents:
+  - name: astra.runners.dsh_terminal_bench.agent:DshTerminalBenchC0Agent
+    model_name: "zai/glm-5.2"
+    env:
+      ZAI_API_KEY: ${ZAI_API_KEY}
+    kwargs:
+      version: 0.1.0rc6
+      profile: terminalbench-glm52
+      turn_timeout_sec: 24000
+      trigger_timeout_sec: 24000
+      poll_interval_sec: 0.5
+datasets:
+  - path: "work/terminal-bench-2-1/tasks"
+    exclude_task_names:
+      - tune-mjcf

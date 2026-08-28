@@ -139,7 +139,7 @@ Astra 的可靠记录由 `session_reconciled` 或 `server_reconciled` 标识；�
 
 88 个配对任务的逐任务输入 token、输出 token、total token、verify 状态、难度和 token 可靠性标志见：
 
-- [astra-hermes-c0-latest-88-task-token-appendix.csv](astra-hermes-c0-latest-88-task-token-appendix.csv)
+- [Astra/Hermes Token 附录](TerminalBench-comparison-astra_hermes-appendix.csv)
 
 附录中的空值表示未可靠取得 token，绝不表示 token 为零。`astra_token_reliable` 仅在 `session_reconciled` 或 `server_reconciled` 时为 `true`；`hermes_token_reliable` 仅在 `reported` 时为 `true`。
 

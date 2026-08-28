@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +27,7 @@ EXPECTED_AGENT = (
 )
 EXPECTED_MODEL = "zai/glm-5.2"
 EXPECTED_VERSION = "0.73.1"
+DEFAULT_REQUIRED_KWARGS = {"preinstalled": True}
 TASK_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
@@ -71,7 +73,16 @@ def load_queue(path: Path) -> list[Task]:
     return tasks
 
 
-def completed_tasks(jobs_dir: Path) -> set[str]:
+def completed_tasks(
+    jobs_dir: Path,
+    *,
+    expected_agent: str = EXPECTED_AGENT,
+    expected_model: str = EXPECTED_MODEL,
+    expected_version: str = EXPECTED_VERSION,
+    required_kwargs: Mapping[str, object] | None = None,
+) -> set[str]:
+    if required_kwargs is None:
+        required_kwargs = DEFAULT_REQUIRED_KWARGS
     if not jobs_dir.is_dir():
         return set()
     latest: dict[str, tuple[str, Path, dict]] = {}
@@ -88,10 +99,13 @@ def completed_tasks(jobs_dir: Path) -> set[str]:
         if (
             finished_at
             and trial_config.get("install_only") is not True
-            and agent.get("name") == EXPECTED_AGENT
-            and agent.get("model_name") == EXPECTED_MODEL
-            and kwargs.get("version") == EXPECTED_VERSION
-            and kwargs.get("preinstalled") is True
+            and agent.get("name") == expected_agent
+            and agent.get("model_name") == expected_model
+            and kwargs.get("version") == expected_version
+            and all(
+                kwargs.get(key) == value
+                for key, value in required_kwargs.items()
+            )
         ):
             candidate = (str(finished_at), path, result)
             previous = latest.get(task)
@@ -126,6 +140,23 @@ def has_valid_verifier_result(result: dict, result_path: Path) -> bool:
     except VerifierEvidenceError:
         return False
     return True
+
+
+def parse_cohort_kwargs(values: Sequence[str] | None) -> dict[str, object]:
+    if values is None:
+        return dict(DEFAULT_REQUIRED_KWARGS)
+    result: dict[str, object] = {}
+    for value in values:
+        key, separator, encoded = value.partition("=")
+        if not separator or not key or key in result:
+            raise ValueError(f"invalid cohort kwarg: {value!r}")
+        try:
+            result[key] = json.loads(encoded)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"invalid JSON value in cohort kwarg: {value!r}"
+            ) from exc
+    return result
 
 
 async def run_tasks(
@@ -218,10 +249,28 @@ def main() -> int:
     parser.add_argument("--print-pending", action="store_true")
     parser.add_argument("--rerun-completed", action="store_true")
     parser.add_argument("--max-tasks", type=int)
+    parser.add_argument("--expected-agent", default=EXPECTED_AGENT)
+    parser.add_argument("--expected-model", default=EXPECTED_MODEL)
+    parser.add_argument("--expected-version", default=EXPECTED_VERSION)
+    parser.add_argument(
+        "--cohort-kwarg",
+        action="append",
+        help="required agent kwarg as KEY=JSON; replaces the Pi default",
+    )
     args = parser.parse_args()
     tasks = load_queue(args.queue)
+    try:
+        required_kwargs = parse_cohort_kwargs(args.cohort_kwarg)
+    except ValueError as exc:
+        parser.error(str(exc))
     if not args.rerun_completed:
-        completed = completed_tasks(args.jobs_dir)
+        completed = completed_tasks(
+            args.jobs_dir,
+            expected_agent=args.expected_agent,
+            expected_model=args.expected_model,
+            expected_version=args.expected_version,
+            required_kwargs=required_kwargs,
+        )
         tasks = [task for task in tasks if task.name not in completed]
     if args.max_tasks is not None:
         if args.max_tasks <= 0:
