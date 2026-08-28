@@ -59,6 +59,7 @@ MOI 的实际参数以每个结果 ZIP 内 `parser_config` 及 manifest 为准�
 ## 其他材料
 
 - [评测方案草稿](plans/drafts/v0.1.md)
+- [统一评测工具升级方案草稿](plans/drafts/unified-evaluation-tool-upgrade-v0.1.md)
 - 本地 OmniDocBench 数据集：`datasets/omnidocbench/`（不提交数据本体）
 - 官方评测工具版本：`opendatalab/OmniDocBench` commit
   `2b161d010d2e3aff77a0edef359ea3a6411d23cd`，正式复现使用固定 Docker 镜像

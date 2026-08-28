@@ -25,14 +25,22 @@ docker compose -p moi_dify_local ps
 curl -fsS http://127.0.0.1:8010/console/api/setup
 ```
 
-Do not reuse Dify Cloud app keys or dataset IDs. Create a local admin, local
-dataset API key, and local app API key. Configure the MatrixOrigin TaaS LLM
-and Embedding provider in the local instance. This run packages and installs
-the repository-owned `dify-plugins/matrixorigin-taas` provider through Dify's
-local `.difypkg` mechanism. It exposes `deepseek-v4-flash` and `bge-m3`; local
-package signature verification is disabled only for this private,
-locally-built package (`FORCE_VERIFYING_SIGNATURE=false`). Then verify both API
-paths:
+Do not reuse Dify Cloud app keys or dataset IDs. Create a local admin and local
+dataset API key. For the current MOI text-only benchmark, configure an active
+DeepSeek-compatible LLM provider for `deepseek-v4-flash`, then install the repository-owned
+`dify-rag-eval/dify-plugins/matrixorigin-huawei-maas.difypkg` package through
+Dify's local plugin UI for `bge-m3` (1024 dimensions). Text generation and
+Judge use DeepSeek official; MaaS is embedding-only. Thinking is disabled and
+no vision model is selected. The package verifier is read-only and does not
+install or mutate Dify:
+
+```bash
+python3 local-rag-platforms/dify-rag-eval/dify-plugins/matrixorigin-huawei-maas/verify_huawei_maas.py
+```
+
+Then verify both API paths with the active split-provider selectors. The
+DeepSeek provider ID is discovered from Dify's active model registry and must
+not be guessed:
 
 ```dotenv
 DIFY_API_BASE_URL=http://127.0.0.1:8010/v1
@@ -40,7 +48,8 @@ DIFY_API_BASE_URL=http://127.0.0.1:8010/v1
 DIFY_LOCAL_API_KEY=<local-app-key>
 DIFY_LOCAL_DATASET_ID=<local-dataset-id>
 DIFY_EMBEDDING_MODEL=bge-m3
-DIFY_EMBEDDING_PROVIDER=matrixorigin/matrixorigin_taas/matrixorigin_taas
+DIFY_DEEPSEEK_LLM_PROVIDER=<active-deepseek-provider-id>
+DIFY_MAAS_EMBEDDING_PROVIDER=matrixorigin/matrixorigin_huawei_maas/huawei_maas
 ```
 
 The existing evaluator uses `/datasets`,
@@ -50,10 +59,11 @@ The existing evaluator uses `/datasets`,
 a native answer as successful when that local app endpoint responds; it does
 not infer local execution from the base URL alone.
 
-## Baidu Qianfan fallback provider
+## Historical provider records
 
-Keep the MatrixOrigin provider. In the local Dify workspace, install or select
-the OpenAI-compatible model provider and create separate Qianfan models:
+The old TaaS/Qianfan instructions below are retained only to explain historical
+smoke artifacts. They are not loaded by the current split-provider campaign and
+must not be used for the 500-document/1000-question run.
 
 ```text
 Base URL:   https://qianfan.baidubce.com/v2

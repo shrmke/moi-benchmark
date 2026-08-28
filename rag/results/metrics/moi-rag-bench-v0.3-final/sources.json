@@ -1,0 +1,85 @@
+{
+  "schema": "moi-final-results-sources-v1",
+  "dataset": "moi-rag-bench-v0.3-final",
+  "system_id": "moi_local",
+  "source_run": "runs/bench-v0.3-final/20260826-moi-v03-final-strict-rerun",
+  "selection_policy": {
+    "results": "byte-identical native MOI final results",
+    "judge_input": "join frozen questions with final retrieval and QA terminal rows by question_id",
+    "judgements": "latest successful non-null judgement per question_id",
+    "judge_attempts": "byte-identical complete judge terminal ledger",
+    "metrics": "byte-identical final metrics-v1 aggregate"
+  },
+  "sources": [
+    {
+      "path": "runs/bench-v0.3-final/20260826-moi-v03-final-strict-rerun/moi/cli-output-global/20260826-115956.073/results.jsonl",
+      "rows": 275,
+      "unique_ids": 275,
+      "status_counts": {
+        "ok": 275
+      },
+      "sha256": "d1b5b5a2b18228903975a6a8e5dc8cbefac41c21d9dd52de660b3f0f94214db0",
+      "copied_to": "results.jsonl"
+    },
+    {
+      "path": "runs/bench-v0.3-final/20260826-moi-v03-final-strict-rerun/terminal-ledger.jsonl",
+      "rows": 550,
+      "unique_ids": 275,
+      "stage_counts": {
+        "qa": 275,
+        "retrieval": 275
+      },
+      "status_counts": {
+        "SUCCESS": 550
+      },
+      "sha256": "ff495677ae9065c6632de73ef3302fa01e6692f6c177089534797b66fc0ebf60"
+    },
+    {
+      "path": "runs/bench-v0.3-final/20260826-moi-v03-final-strict-rerun/moi/global-questions.jsonl",
+      "rows": 275,
+      "unique_ids": 275,
+      "sha256": "17bfd95ad71cb26d7112035382654333f9557e80e3ff48dcb6b6cd26c8393e09"
+    },
+    {
+      "path": "runs/bench-v0.3-final/20260826-moi-v03-final-strict-rerun/judge/judge-initial-ledger.jsonl",
+      "rows": 275,
+      "unique_ids": 275,
+      "source_dataset_counts": {
+        "docbench": 130,
+        "enterprise": 40,
+        "multihop": 105
+      },
+      "sha256": "7701294bc9a19c90399a7f8833b1770a8011808ee31185aa87d26dc993db992a"
+    },
+    {
+      "path": "runs/bench-v0.3-final/20260826-moi-v03-final-strict-rerun/judge/judge-terminal-ledger.jsonl",
+      "rows": 276,
+      "unique_ids": 275,
+      "status_counts": {
+        "FAILED": 1,
+        "SUCCESS": 275
+      },
+      "sha256": "9c4fc1210fd49e3e119e518c259f05f667fff26b19247ce4f79869bd812b682a",
+      "copied_to": "judge-attempts.jsonl"
+    },
+    {
+      "path": "runs/bench-v0.3-final/20260826-moi-v03-final-strict-rerun/judge/judge-start-record.json",
+      "kind": "judge_contract",
+      "sha256": "fc71842a5f27df4976dc6873e555813c71a111d70dff93d99a8e2db4c4c1c0d7"
+    },
+    {
+      "path": "runs/bench-v0.3-final/20260826-moi-v03-final-strict-rerun/metrics-v1-aggregate.json",
+      "kind": "final_metrics",
+      "status": "COMPLETE",
+      "sha256": "7283babe469d4796b602d065630a3d97c05f127561c6c679d797fd8f49fc2ab8",
+      "copied_to": "metrics.json"
+    }
+  ],
+  "archive_outputs": {
+    "results.jsonl": "d1b5b5a2b18228903975a6a8e5dc8cbefac41c21d9dd52de660b3f0f94214db0",
+    "judge-input.jsonl": "87e03a0f13b5c4e5ec7f3b7f6a9efc611f7f53dafd8ea4b607b50df221594002",
+    "judgements.jsonl": "dbd3ce554dbe3e2e1cde6dea7c02f8a6130d79d35c38941b3767bf93b6f44c8b",
+    "judge-attempts.jsonl": "9c4fc1210fd49e3e119e518c259f05f667fff26b19247ce4f79869bd812b682a",
+    "metrics.json": "7283babe469d4796b602d065630a3d97c05f127561c6c679d797fd8f49fc2ab8"
+  }
+}

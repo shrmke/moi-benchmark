@@ -397,7 +397,7 @@ runs/<root>/<timestamp>/
 2. **`--source` 与 `--documents` 的 chunking 不同。** 要测产品解析后的正式链路，应优先使用 parser 产出的 `documents.jsonl`。
 3. **空的 image-only block 不进入文本 embedding 表。** 它们仍在 parser artifact 中，但当前纯文本索引不能单独召回它们。
 4. **当前没有独立 reranker 阶段。** 检索排序由 full-text/vector 候选合并、literal match、route rank 和上下文扩展组成。
-5. **本地向量索引 operator 需要单独确认。** 本地 benchmark 建表时声明了 `vector_cosine_ops`，而 MatrixFlow RAG 查询 SQL 使用 `l2_distance`；这两者是否在当前 MatrixOne 配置下正确命中索引，应在性能测试前用 `EXPLAIN` 和实际 latency 验证。
+5. **向量索引 operator 与查询距离已完成一致性冻结。** 当前 `EnsureVectorTableForLocalRAG` 新建 IVFFLAT 使用 `vector_l2_ops`，检索实现根据现有 index operator 选择 `l2_distance` 或 `cosine_distance`；本轮 formal 配置使用每 run 唯一 database/table，readiness smoke 的实际表已验证为 `vector_l2_ops`。历史 cosine 表不纳入本轮 formal package；正式 500/1000 的 EXPLAIN/latency 仍属于 live run 记录，不在 readiness smoke 中宣称完成。
 6. **生成质量指标较轻。** 当前 controlled generation 只算答案关键词 recall；Explore 的 `selected_sources` 主要用于可追踪和引用约束，还没有在本地自动计算 citation precision/recall 或 faithfulness。
 7. **索引必须和 embedding 配置成对冻结。** `embedding model + dimension + chunking + index_version` 应写入 run manifest，不能只记录最终答案。
 

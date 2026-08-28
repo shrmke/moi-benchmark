@@ -1,11 +1,44 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+import os
 from typing import Optional
 
 from dify_plugin import OAICompatLargeLanguageModel
 from dify_plugin.entities.model.llm import LLMResult, LLMResultChunk
 from dify_plugin.entities.model.message import PromptMessage, PromptMessageTool
+
+
+DEFAULT_MAAS_BASE_URL = "https://api.modelarts-maas.com/v1"
+MAAS_GLM_MODEL = "glm-5.2"
+
+
+def _normalise_url(value: object) -> str:
+    return str(value or "").strip().rstrip("/")
+
+
+def is_huawei_maas_glm(model: str, credentials: dict) -> bool:
+    """Identify only the exact MaaS GLM contract, leaving legacy providers alone."""
+
+    configured_base_url = credentials.get("base_url") or os.getenv("MAAS_BASE_URL", DEFAULT_MAAS_BASE_URL)
+    expected_base_url = os.getenv("MAAS_BASE_URL", DEFAULT_MAAS_BASE_URL)
+    return (
+        str(model).strip() == MAAS_GLM_MODEL
+        and _normalise_url(configured_base_url) == _normalise_url(expected_base_url)
+    )
+
+
+def prepare_huawei_maas_model_parameters(
+    model: str,
+    credentials: dict,
+    model_parameters: dict,
+) -> dict:
+    """Add MaaS GLM's required disabled-thinking mode without mutating input."""
+
+    prepared = dict(model_parameters)
+    if is_huawei_maas_glm(model, credentials):
+        prepared["thinking"] = {"type": "disabled"}
+    return prepared
 
 
 class MatrixOriginTaaSLargeLanguageModel(OAICompatLargeLanguageModel):
@@ -42,7 +75,7 @@ class MatrixOriginTaaSLargeLanguageModel(OAICompatLargeLanguageModel):
             model=model,
             credentials=self._oai_credentials(model, credentials),
             prompt_messages=prompt_messages,
-            model_parameters=model_parameters,
+            model_parameters=prepare_huawei_maas_model_parameters(model, credentials, model_parameters),
             tools=tools,
             stop=stop,
             stream=stream,

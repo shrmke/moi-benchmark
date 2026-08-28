@@ -1,10 +1,13 @@
 # MaxKB local（v2.10.4-lts）
 
 本方案只在 Dify 停止后运行 MaxKB；MOI 的 `moi-openxml-parser` 与
-`matrixone` 必须保持运行。MaxKB 服务留在本机 Colima；当前竞品评估链路使用
-百度千帆 V2 `qwen3-embedding-8b`（4096 维）embedding 与
-`deepseek-v4-flash` chat，因此部署类型是 `LOCAL_VARIANT`，不是 fully offline。
-历史 MaaS/TaaS smoke 证据仍保留在本目录说明中，但不再作为当前评估的向量空间。
+`matrixone` 必须保持运行。MaxKB 服务留在本机 Colima；当前 MOI text-only
+竞品评估链路使用 MaaS `bge-m3`（1024 维）embedding 与 DeepSeek 官方
+`deepseek-v4-flash` 文本生成，thinking disabled，不调用 MLLM/Qwen。由于 MaxKB `2.10.4` 无法证明
+原生应用能持久化嵌套 thinking 参数，统一 runner 采用 MaxKB admin
+`hit_test` 检索 + DeepSeek 外部生成，并在产物中标记为
+`diagnostic_admin_retrieval_plus_external_deepseek_generation`。
+历史 Qianfan/TaaS smoke 证据仍保留在本目录说明中，但不属于当前评测。
 
 ## 已核对的不变量
 
@@ -52,21 +55,20 @@ docker run -d \
 等待 `http://127.0.0.1:8090/admin/` 可访问。不要停止 MOI，也不要把 8080
 映射给 MaxKB。
 
-## 管理员与 TaaS provider
+## 管理员与当前 split provider
 
 1. 打开 `http://127.0.0.1:8090/admin/`，使用官方初始账号 `admin` /
    `MaxKB@123..` 登录，立即在个人信息中修改密码；新密码只保存在本地
    密码管理器或 `.local-services/maxkb_local/runtime.env`，不要写入日志。
 2. 在“模型 → 全部模型 → OpenAI → 添加模型”分别创建两个记录：
-   - 大语言模型：基础模型填 `TAAS_CHAT_MODEL`；API URL 填
-     `https://token.moi.matrixorigin.cn/v1`；API Key 填 `TAAS_API_KEY`。
-   - 向量模型：基础模型填 `TAAS_EMBEDDING_MODEL`（当前 TaaS `/models`
-   返回的 endpoint ID 为 `bge-m3`）；同一 API URL/API Key；Dimensions
-     留空（TaaS 不接受自定义 `dimensions`）。
+   - 大语言模型：基础模型填 `deepseek-v4-flash`；API URL 填
+     `https://api.deepseek.com`；API Key 填 `DEEPSEEK_API_KEY_NEW`。
+   - 向量模型：基础模型填 `bge-m3`；API URL 填
+     `https://api.modelarts-maas.com/v1`；API Key 填 `MAAS_API_KEY`；维度固定为 `1024`。
 3. 两个记录都要通过 MaxKB 的保存时连通性验证。不要把 TaaS key 放入
    智能体提示词、API discovery artifact 或 shell history。
 
-千帆作为当前评估 Provider 时，再创建两个 OpenAI 记录，不覆盖历史 TaaS/MaaS：
+下面的 TaaS/Qianfan 记录说明仅用于解释历史运行，不得用于当前 benchmark：
 
 - LLM：API URL `https://qianfan.baidubce.com/v2`，模型
   `deepseek-v4-flash`；
@@ -112,10 +114,57 @@ install -m 600 local-rag-platforms/maxkb_local/runtime.env.example \
 # 手工编辑非敏感参数后：set -a; source .env; source .local-services/maxkb_local/runtime.env; set +a
 ```
 
+### DeepSeek text / Huawei MaaS embedding 注册与验证
+
+DeepSeek text 与 MaaS embedding 使用独立的 OpenAI-compatible 记录，不复用
+旧 Qianfan 或 MaaS-only GLM 记录。`maxkb_maas_models.py` 按
+`provider + model_type + model_name` 精确
+选择；重复记录必须显式传入 model ID，错误 provider/模型不会被静默替换。
+请求合同为：
+
+```text
+provider                      = model_openai_provider
+LLM model_name               = deepseek-v4-flash
+LLM credential.api_base      = DEEPSEEK_BASE_URL or https://api.deepseek.com
+LLM credential.api_key       = DEEPSEEK_API_KEY_NEW
+EMBEDDING model_name         = bge-m3
+EMBEDDING dimensions         = 1024
+EMBEDDING credential.api_base = MAAS_BASE_URL or https://api.modelarts-maas.com/v1
+EMBEDDING credential.api_key  = MAAS_API_KEY
+```
+
+先做只读 dry-run，再按需验证/注册。以下命令不会打印 key；`register` 默认
+不写 MaxKB，只有 `--execute` 会创建缺失的精确记录：
+
+```bash
+set -a; source .env; source .local-services/maxkb_local/runtime.env; set +a
+local-rag-platforms/maxkb_local/maxkb_maas_models.py register --skip-provider-probe
+local-rag-platforms/maxkb_local/maxkb_maas_models.py verify --skip-provider-probe
+local-rag-platforms/maxkb_local/maxkb_maas_models.py register --execute
+```
+
+`verify`/`register --execute` 可在不使用 `--skip-provider-probe` 时对 DeepSeek
+`/chat/completions` 与 MaaS `/embeddings` 做真实探测；单元测试使用 fake admin/provider，
+不会发真实请求。MaxKB `2.10.4` 无法保存嵌套 `thinking` 参数，因此 helper
+明确返回 `native_supported: false`、`runner_mode: external`；DeepSeek 生成必须由
+外部 OpenAI-compatible 请求完成，并携带 `thinking: {"type":"disabled"}`。
+这不是 native MaxKB DeepSeek 支持，runner 仍需由主流程按外部生成处理。
+
+当前 MOI text-only serial smoke 使用 `deepseek-v4-flash` / `bge-m3`，embedding 宽度由
+MaaS probe 固定为 `1024`。MaxKB 存在重复的 bge 记录时，必须显式设置
+`MAXKB_LLM_MODEL_ID` 与 `MAXKB_EMBEDDING_MODEL_ID`；helper 会对重复发现
+fail-closed，不会按列表首项静默选择。外部生成路径的上下文还固定为最多
+`64` 个 chunk、`16000` 字符（可用 `MAXKB_EXTERNAL_MAX_CHUNKS` /
+`MAXKB_EXTERNAL_CONTEXT_CHARS` 显式覆盖），以避免把整段 admin hit_test
+原文直接送入 DeepSeek。当前成功证据为
+`runs/readiness/live-smoke-20260820/005-maxkb_local-smoke-context-bounded`；
+首轮 004 的 403 作为失败诊断保留。
+
 ## 三文档 smoke 初始化
 
 1. “知识库 → 创建知识库”：名称 `moi-maxkb-smoke-3docs`，类型“通用型”，
-   向量模型选上面的 TaaS Embedding。
+   向量模型选上面的 MaaS Embedding。该小节是旧的手工三文档 smoke；当前
+   benchmark readiness 使用 `text_only_smoke_ready_for_eval` 的 6 文档包。
 2. 上传且仅上传：
    - `local-rag-platforms/fixtures/smoke/001-project-boundary.md`
    - `local-rag-platforms/fixtures/smoke/002-service-ports.md`

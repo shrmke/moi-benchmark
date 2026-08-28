@@ -1,6 +1,6 @@
 # MOI 实验结果归档包
 
-本目录按数据集整理自 `runs/final-results/moi/20260817-final/` 的 canonical 实验结果，原始运行目录未移动或覆盖。
+本目录原有五个数据集整理自 `runs/final-results/moi/20260817-final/` 的 canonical 实验结果；另收录后续的 MOI RAG Benchmark v0.3 final 严格复跑。所有原始运行目录均未移动或覆盖。
 
 每个数据集目录包含：
 
@@ -11,9 +11,11 @@
 - `sources.json`：原始运行文件 provenance；
 - `README.md`：该数据集的口径与限制。
 
-数据集：`wikieval`、`mmdocir`、`docbench`、`enterpriserag-bench`、`lenovo-bench`。
+数据集：`wikieval`、`mmdocir`、`docbench`、`enterpriserag-bench`、`lenovo-bench`；另新增独立归档 `moi-rag-bench-v0.3-final/`，对应 MOI 的 275 题最终严格复跑。
 
 根目录的 `canonical-manifest.json` 和 `final-score-summary.json` 保存整体 manifest 与最终汇总。DocBench 的 4 个最终失败题仍保留在 `results.jsonl`，用于维持全量分母。
+
+`moi-rag-bench-v0.3-final/` 晚于上述五数据集冻结包，因此不反向改写 2026-08-17 的根 manifest；该次运行的来源与哈希记录在其目录内的 `sources.json`。
 
 ## 上传策略
 

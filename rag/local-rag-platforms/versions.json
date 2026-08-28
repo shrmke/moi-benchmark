@@ -10,7 +10,63 @@
     "compose_required": ">=2.24"
   },
   "model_egress": "external",
+  "updated_at": "2026-08-28",
+  "current_evaluation": {
+    "dataset_id": "moi-rag-bench-v0.3.1-qa-revision",
+    "package": "datasets/moi-rag-bench-v0.3.1-qa-revision/ready_for_eval",
+    "provider_policy": "deepseek_text_maas_embedding",
+    "text_llm_provider": "deepseek-official",
+    "embedding_provider": "maas",
+    "embedding_model": "bge-m3",
+    "embedding_dimension": 1024,
+    "text_llm": "deepseek-v4-flash",
+    "judge": "deepseek-v4-flash",
+    "thinking": {
+      "type": "disabled"
+    },
+    "mllm": "NOT_APPLICABLE",
+    "mllm_calls": 0,
+    "serial_order": [
+      "moi_local",
+      "dify_local",
+      "fastgpt_local",
+      "maxkb_local"
+    ],
+    "campaign_artifact": "runs/bench-v0.3.1-merged/campaign-summary.json",
+    "historical_service_fields_are_non_authoritative": true
+  },
   "services": {
+    "moi_matrixone": {
+      "kind": "database",
+      "image": "matrixorigin/matrixone:4.1.4",
+      "version": "4.1.4",
+      "runtime": "8.0.30-MatrixOne-v4.1.4",
+      "image_id": "sha256:16ef37311b43c6882ed8242bf38b1e281d853d4f4f6163830fe10773c9fe011d",
+      "compose": {
+        "type": "docker-compose",
+        "path": "moi-prototypes/local-matrixflow-rag/docker-compose.yml",
+        "images": {
+          "matrixone": "matrixorigin/matrixone:4.1.4"
+        }
+      },
+      "health": {
+        "type": "tcp",
+        "host": "127.0.0.1",
+        "port": 6001
+      },
+      "status": "FROZEN",
+      "evidence": "results/reports/MOI_rag_reproduction_guide.md",
+      "active_benchmark": {
+        "provider_policy": "deepseek_text_maas_embedding",
+        "text_llm_provider": "deepseek-official",
+        "embedding_provider": "maas",
+        "embedding_model": "bge-m3",
+        "embedding_dimension": 1024,
+        "text_llm": "deepseek-v4-flash",
+        "thinking": {"type": "disabled"},
+        "mllm": "NOT_APPLICABLE"
+      }
+    },
     "dify_local": {
       "repo": "https://github.com/langgenius/dify.git",
       "tag": "1.16.1",
@@ -21,9 +77,32 @@
       "port": 8010,
       "port_note": "Host 8000 was already occupied by an unrelated uvicorn process; Dify remains on the planned container port with host mapping 8010.",
       "platform_policy": "native_then_emulated",
+      "compose": {
+        "type": "docker-compose",
+        "path": "docker/docker-compose.yaml",
+        "images": {
+          "api": "langgenius/dify-api:1.16.1",
+          "web": "langgenius/dify-web:1.16.1"
+        }
+      },
+      "health": {
+        "type": "http",
+        "url": "http://127.0.0.1:8010/console/api/setup"
+      },
       "resolved_source_commit": "6f8ed69ee15f9a2e7189ca066275e973d091d1e9",
       "status": "LOCAL_VARIANT",
-      "execution_result": "smoke_ready_44_document_readiness_2026_08_06"
+      "execution_result": "smoke_ready_44_document_readiness_2026_08_06",
+      "active_benchmark": {
+        "provider_policy": "deepseek_text_maas_embedding",
+        "text_llm_provider": "deepseek-official",
+        "embedding_provider": "maas",
+        "embedding_plugin_id": "matrixorigin/matrixorigin_huawei_maas/huawei_maas",
+        "embedding_model": "bge-m3",
+        "embedding_dimension": 1024,
+        "text_llm": "deepseek-v4-flash",
+        "thinking": {"type": "disabled"},
+        "mllm": "NOT_APPLICABLE"
+      }
     },
     "fastgpt_local": {
       "repo": "https://github.com/labring/FastGPT.git",
@@ -34,13 +113,36 @@
       "deployment_image_version": "v4.15.4",
       "deployment_image_note": "The checked-in v4.15 PgVector compose currently references v4.15.4 images while the source checkout is v4.15.6.",
       "platform_policy": "native_then_emulated",
+      "compose": {
+        "type": "docker-compose",
+        "path": "document/public/deploy/docker/v4.15/global/docker-compose.pg.yml",
+        "images": {
+          "app": "ghcr.io/labring/fastgpt:v4.15.4",
+          "code_sandbox": "ghcr.io/labring/fastgpt-code-sandbox:v4.15.4",
+          "mcp_server": "ghcr.io/labring/fastgpt-mcp_server:v4.14.23"
+        }
+      },
+      "health": {
+        "type": "http",
+        "url": "http://127.0.0.1:3000/api/system/getInitData"
+      },
       "resolved_source_commit": "3db33e93b78e75b37c93f7a6e3d0fafeafbfd256",
       "status": "LOCAL_VARIANT",
       "execution_result": "qianfan_pdf_full_chain_success_2026_08_10",
       "smoke_artifact": ".local-services/fastgpt_local/logs/acceptance-qianfan-20260810-165918/manifest.json",
       "provider": "Baidu Qianfan V2",
       "embedding_model": "qwen3-embedding-8b",
-      "chat_model": "deepseek-v4-flash"
+      "chat_model": "deepseek-v4-flash",
+      "active_benchmark": {
+        "provider_policy": "deepseek_text_maas_embedding",
+        "text_llm_provider": "deepseek-official",
+        "embedding_provider": "maas",
+        "embedding_model": "bge-m3",
+        "embedding_dimension": 1024,
+        "text_llm": "deepseek-v4-flash",
+        "thinking": {"type": "disabled"},
+        "mllm": "NOT_APPLICABLE"
+      }
     },
     "ragflow_local": {
       "repo": "https://github.com/infiniflow/ragflow.git",
@@ -62,13 +164,39 @@
       "base_url": "http://127.0.0.1:8090",
       "port": 8090,
       "platform_policy": "native_then_emulated",
+      "image": "1panel/maxkb:v2.10.4-lts",
+      "image_digest": "sha256:20205df1ba6eef4e4276e48c892038de72cf8618d1e1c1d50eb1f535d45dfedc",
+      "image_architecture": "linux/arm64",
+      "compose": {
+        "type": "docker-run",
+        "path": "local-rag-platforms/maxkb_local/maxkb-local.sh",
+        "images": {
+          "app": "1panel/maxkb:v2.10.4-lts"
+        }
+      },
+      "health": {
+        "type": "http",
+        "url": "http://127.0.0.1:8090/admin/"
+      },
       "resolved_source_commit": "fd6141e662582e88a41edbb7f6f89f4539e3e5dd",
       "status": "LOCAL_VARIANT",
       "execution_result": "maas_embedding_qianfan_chat_full_chain_success_2026_08_10",
       "smoke_artifact": ".local-services/maxkb_local/logs/maxkb-full-chain-live/manifest.json",
       "embedding_model": "ModelArts MaaS bge-m3",
       "chat_model": "Baidu Qianfan V2 deepseek-v4-flash",
-      "direct_retrieval": "UNSUPPORTED_API"
+      "direct_retrieval": "UNSUPPORTED_API",
+      "active_benchmark": {
+        "provider_policy": "deepseek_text_maas_embedding",
+        "text_llm_provider": "deepseek-official",
+        "embedding_provider": "maas",
+        "embedding_model": "bge-m3",
+        "embedding_dimension": 1024,
+        "text_llm": "deepseek-v4-flash",
+        "thinking": {"type": "disabled"},
+        "mllm": "NOT_APPLICABLE",
+        "retrieval_contract": "diagnostic_admin_hit_test",
+        "generation_contract": "external_deepseek_chat_completions"
+      }
     }
   }
 }

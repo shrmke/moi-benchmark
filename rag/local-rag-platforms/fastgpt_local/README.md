@@ -18,9 +18,26 @@ stack. The pinned source checkout is `v4.15.6`, while the release’s checked-in
 deployment file currently references FastGPT and code-sandbox images at
 `v4.15.4`; this is recorded as a version divergence in the runtime manifest.
 Configure at least one Language Model and one Index Model through the local UI.
-The current verified pair is Baidu Qianfan V2 `deepseek-v4-flash` plus
-`qwen3-embedding-8b`; the product and its data services remain local. TaaS and
-MaaS remain independent provider options and must not share an embedding index.
+The historical Qianfan pair is documented below as a legacy condition. The
+current MOI text-only serial benchmark uses DeepSeek official
+`deepseek-v4-flash` for text generation and Huawei MaaS `bge-m3` for embedding
+(effective upstream dimension 1024); the product and its data services remain
+local. Historical provider conditions must not share an embedding index.
+
+### Current MOI split-provider contract
+
+For the current benchmark, FastGPT has two independent OpenAI-compatible
+channels and exactly two active `system_models` rows before dataset creation:
+
+- `deepseek-v4-flash`: active `llm` on the DeepSeek official channel,
+  `thinking={"type":"disabled"}`;
+- `bge-m3`: active `embedding`, OpenAI-compatible provider, weight `100`.
+
+Run the provider helper once for DeepSeek and once with MaaS embedding-only.
+The generic saved-channel aggregate may return an empty result on AIProxy
+`v0.6.5`; direct provider probes and the isolated FastGPT dataset/native-QA
+smoke remain authoritative. The model update only touches the exact model
+names and never deletes unrelated rows.
 
 ### Qianfan embedding dimension contract
 
@@ -98,8 +115,12 @@ python3 local-rag-platforms/fastgpt_local/fastgpt_local.py provider
 python3 local-rag-platforms/fastgpt_local/fastgpt_local.py smoke
 ```
 
-The second command is also a dry run: it prints the versioned API contract in
-`contracts.json`. The prepared smoke uses the v4.15.6 source contract, notably:
+The second command is also a dry run: it prints the selected provider's
+versioned contract. MaaS uses the active, provider-specific
+`maas_provider_contract.json` and prints its effective redacted channel;
+the older TaaS/Qianfan template is retained separately as
+`legacy_provider_contracts.json` and is never used for MaaS output. The
+prepared smoke uses the v4.15.6 source contract, notably:
 
 - local file upload sends a binary `file` plus a JSON-serialized multipart
   `data` field;
@@ -147,9 +168,13 @@ FastGPT also requires model metadata types `llm`, `embedding`, and `rerank`
 (plus embedding `weight`). Missing types explain the empty/Unknown model test:
 the saved-channel aggregate test cannot supply FastGPT's model type. The
 authoritative checks are the three type-aware UI model tests.
-For Qianfan only, the CLI records an empty saved-channel aggregate as
-`empty_non_authoritative_use_fastgpt_type_aware_tests`; explicit failed model
-results remain errors, and other providers still reject an empty aggregate.
+For Qianfan and the generic OpenAI-compatible Huawei MaaS channel, the CLI
+records an empty saved-channel aggregate as non-authoritative because this
+AIProxy release does not return per-model results for those saved channels.
+Qianfan records `empty_non_authoritative_use_fastgpt_type_aware_tests`; MaaS
+records `empty_non_authoritative_use_fastgpt_native_smoke`. Explicit failed
+model results remain errors. For MaaS, the subsequent isolated FastGPT
+dataset/native-QA smoke and the direct MaaS provider probe are authoritative.
 
 After MaxKB has been stopped by its owner, execute exactly:
 
@@ -175,11 +200,25 @@ from the running container without printing it, creates the channel only when
 its name is absent, re-lists it, validates type/base URL/models, and tests all
 saved models. It refuses to overwrite a mismatched or duplicate channel.
 
+For the active split contract, create the DeepSeek text channel and the MaaS
+embedding-only channel while the serial competitor window is closed:
+
+```bash
+python3 local-rag-platforms/fastgpt_local/fastgpt_local.py provider --provider deepseek-official --execute
+MAAS_EMBEDDING_ONLY=1 python3 local-rag-platforms/fastgpt_local/fastgpt_local.py provider --provider maas --execute
+```
+
+The DeepSeek channel contains only `deepseek-v4-flash`; the MaaS channel
+contains only `bge-m3`. The execute paths read their dedicated keys, repair
+only the exact named channel when needed, and never print credentials.
+
 Sign in locally at `http://127.0.0.1:3000`. In **Account → Model Providers**,
-confirm the new channel, import `taas-models.example.json` if those model
-definitions are not already present, enable both models, and run each UI model
-test. Create a local knowledge-base app wired to the smoke dataset, publish it,
-and create a local API key. Record only its app ID and key in the repository-root `.env`.
+confirm the DeepSeek and Huawei MaaS channels and ensure
+`deepseek-v4-flash`/`bge-m3` are enabled. `deepseek-models.example.json` and
+`maas-models.example.json` are the source contracts; do not import the historical
+`taas-models.example.json` for this benchmark. Create a local knowledge-base
+app wired to the smoke dataset, publish it, and create a local API key. Record
+only its app ID and key in the repository-root `.env`.
 
 Add Qianfan as a second AIProxy channel without replacing TaaS. First merge
 the three entries from `qianfan-models.example.json` into the existing model

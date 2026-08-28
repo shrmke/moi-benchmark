@@ -8,9 +8,9 @@ The benchmark has two deliberately separate tracks:
 * streaming application requests, used only for transport metrics such as TTFE
   and event throughput.
 
-MOI's current local implementation is a native MatrixFlow CLI over MatrixOne,
-so it is reported as a CLI retrieval measurement and does not manufacture API
-streaming metrics that the local deployment does not expose.
+MOI uses the official Catalog A2A/SSE data plane for application metrics.  Its
+native MatrixFlow CLI remains a separate direct-retrieval diagnostic and is
+never exposed through an HTTP wrapper.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[4]
 PLATFORM_ROOT = ROOT / "local-rag-platforms"
 DATASET_DEFAULT = ROOT / "datasets/lenovo-bench/moi-corpus-100q-v1/questions.all.jsonl"
 PLATFORM_ORDER = ("moi", "dify", "fastgpt", "maxkb")
-MOI_ROOT = ROOT / "prototypes/local-matrixflow-rag"
+MOI_ROOT = ROOT / "moi-prototypes/local-matrixflow-rag"
 MOI_LAUNCHER = MOI_ROOT / "main.go"
 MOI_CONFIG = MOI_ROOT / "config.lenovo-bench.latency.maas.json"
 
@@ -288,15 +288,28 @@ class _InFlight:
         self.lock = Lock()
         self.current = 0
         self.peak = 0
+        self.last_change = time.perf_counter()
+        self.area = 0.0
+
+    def _advance(self, now: float) -> None:
+        self.area += self.current * (now - self.last_change)
+        self.last_change = now
 
     def enter(self) -> None:
         with self.lock:
+            self._advance(time.perf_counter())
             self.current += 1
             self.peak = max(self.peak, self.current)
 
     def leave(self) -> None:
         with self.lock:
+            self._advance(time.perf_counter())
             self.current = max(0, self.current - 1)
+
+    def average(self, elapsed_s: float) -> float:
+        with self.lock:
+            self._advance(time.perf_counter())
+            return self.area / max(elapsed_s, 0.000001)
 
 
 def _exception_sample(exc: BaseException, index: int, worker_id: int) -> dict[str, Any]:
@@ -360,7 +373,9 @@ def run_request_batch(
     elapsed = max(time.perf_counter() - started, 0.000001)
     complete = [sample for sample in samples if sample is not None]
     return (
-        summarize_samples(complete, elapsed, connections, tracker.peak),
+        summarize_samples(
+            complete, elapsed, connections, tracker.peak, tracker.average(elapsed)
+        ),
         complete,
     )
 
@@ -380,6 +395,7 @@ def unsupported_empty_workflow(reason: str) -> dict[str, Any]:
         "latency_ms": _distribution([]),
         "connections": 0,
         "peak_in_flight": 0,
+        "average_in_flight": 0.0,
     }
 
 
@@ -417,6 +433,8 @@ def _skipped_summary(reason: str, connections: int) -> dict[str, Any]:
         "connections": connections,
         "configured_connections": connections,
         "peak_in_flight": 0,
+        "average_in_flight": 0.0,
+        "ttfb_ms": _distribution([]),
         "ttfe_ms": _distribution([]),
         "latency_ms": _distribution([]),
     }
@@ -493,6 +511,50 @@ def build_lenovo_api_targets(
 
     env = dict(environ)
     builtins = build_builtin_targets(env)
+
+    moi_workspace_id = env.get("MOI_NATIVE_WORKSPACE_ID", "")
+    moi_event = ScenarioConfig(
+        name="events",
+        path="/api/v1/agents/a2a" if moi_workspace_id else "",
+        protocol="sse",
+        supported=bool(moi_workspace_id),
+        headers={"X-Workspace-ID": "${MOI_NATIVE_WORKSPACE_ID}"},
+        body={
+            "agent_code": "explore",
+            "jsonrpc": "2.0",
+            "id": "{{uuid}}",
+            "method": "message/stream",
+            "params": {
+                "model": env.get("MOI_NATIVE_MODEL", "deepseek-chat"),
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "{{uuid}}",
+                    "parts": [{"kind": "text", "text": "{{query}}"}],
+                },
+            },
+        },
+        note="MOI official Catalog A2A message/stream endpoint.",
+    )
+    moi_app = TargetConfig(
+        name="moi",
+        base_url=env.get("MOI_NATIVE_BASE_URL", "http://127.0.0.1:8081"),
+        api_key_env="MOI_NATIVE_API_KEY",
+        auth_header="X-API-Key",
+        auth_scheme="raw",
+        event=moi_event,
+        empty_workflow=moi_event,
+        required_env=("MOI_NATIVE_WORKSPACE_ID",),
+        metadata={"implementation": "MOI official Catalog A2A SSE"},
+    )
+    moi_retrieval = ScenarioConfig(
+        name="retrieval",
+        path="",
+        protocol="json",
+        supported=False,
+        note="MOI A2A does not expose a direct-retrieval HTTP contract; native SearchRAGChunks is measured separately.",
+    )
+    moi_db = replace(moi_app, name="moi-retrieval", event=moi_retrieval)
 
     dify_base = (env.get("DIFY_API_BASE_URL") or "http://127.0.0.1:8010/v1").rstrip("/")
     dify_event = _event_scenario()
@@ -582,16 +644,14 @@ def build_lenovo_api_targets(
     max_event = ScenarioConfig(
         name="events",
         path=f"/chat/api/{max_app_id}/chat/completions" if max_app_id else "",
-        # The deployed MaxKB public contract rejects Accept: text/event-stream
-        # and currently returns one OpenAI-compatible JSON response instead.
-        # Count that response as one transport event rather than fabricating SSE.
-        protocol="json",
+        protocol="sse",
+        headers={"Accept": "*/*"},
         supported=bool(max_app_id),
         body={
             "model": env.get("MAXKB_MODEL", "maxkb"),
             "user": "lenovo-latency-{{uuid}}",
             "messages": [{"role": "user", "content": "{{query}}"}],
-            "stream": False,
+            "stream": True,
         },
     )
     max_app = TargetConfig(
@@ -632,6 +692,7 @@ def build_lenovo_api_targets(
     )
 
     return {
+        "moi": {"retrieval": moi_db, "events": moi_app},
         "dify": {"retrieval": dify_db, "events": dify_app},
         "fastgpt": {"retrieval": fast_db, "events": fast_app},
         "maxkb": {"retrieval": max_db, "events": max_app},
@@ -664,8 +725,9 @@ def _run_api_track(
         "retrieval_contract": targets["retrieval"].metadata.get("implementation"),
         "connections_requested": connections,
     }
+    warmup_target = targets["retrieval"] if targets["retrieval"].event.supported else targets["events"]
     result["retrieval_warmup"] = _warmup_retrieval(
-        targets["retrieval"], queries[0], environ, timeout_s
+        warmup_target, queries[0], environ, timeout_s
     ) if queries else {"status": "skipped", "reason": "no queries"}
     for track in ("retrieval", "events"):
         target = targets[track]
@@ -964,6 +1026,27 @@ def _run_moi(
     }
 
 
+def _run_moi_with_official_api(
+    targets: Mapping[str, TargetConfig],
+    queries: Sequence[Mapping[str, Any]],
+    environ: Mapping[str, str],
+    connections: int,
+    timeout_s: float,
+    output_dir: Path,
+) -> dict[str, Any]:
+    result = _run_moi(queries, environ, connections, timeout_s, output_dir)
+    api_result = _run_api_track(
+        "moi", targets, queries, environ, connections, timeout_s, output_dir
+    )
+    result["implementation"] = "MOI official Catalog A2A SSE + native SearchRAGChunks diagnostic"
+    result["protocol"] = "a2a-sse + native-cli"
+    result["events"] = api_result["events"]
+    result["retrieval_warmup"] = api_result["retrieval_warmup"]
+    statuses = [result.get("retrieval", {}).get("status"), result["events"].get("status")]
+    result["status"] = "ok" if all(value == "ok" for value in statuses) else "partial"
+    return result
+
+
 def _value(value: Any, digits: int = 3) -> str:
     if value is None:
         return "N/A"
@@ -1003,8 +1086,8 @@ def _make_report(
         "",
         "## Headline results",
         "",
-        "| Platform | Retrieval p50 / p95 (ms) | Event Throughput (events/s) | TTFE p50 / p95 (ms) | Connections (configured / peak) | Empty Workflow QPS | Status |",
-        "|---|---:|---:|---:|---:|---:|---|",
+        "| Platform | Retrieval p50 / p95 (ms) | App protocol | App QPS | TTFB p50 / p95 (ms) | TTFE p50 / p95 (ms) | Event Throughput* (events/s) | Connections (configured / peak / avg active) | Empty Workflow QPS | Status |",
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for platform in tested_platforms:
         result = results.get(platform, {})
@@ -1019,18 +1102,33 @@ def _make_report(
             events.get("status") not in {"error", "unsupported", "skipped"}
             and int(events.get("successes", 0) or 0) > 0
         )
-        throughput = _value(events.get("event_throughput_events_per_s")) if event_usable else "N/A"
+        protocol = events.get("protocol")
+        throughput = (
+            _value(events.get("event_throughput_events_per_s"))
+            if event_usable and protocol == "sse"
+            else "N/A"
+        )
+        ttfb = (
+            f"{_value(_p(events, 'ttfb_ms', 'p50'))} / {_value(_p(events, 'ttfb_ms', 'p95'))}"
+            if event_usable
+            else "N/A / N/A"
+        )
         ttfe = (
             f"{_value(_p(events, 'ttfe_ms', 'p50'))} / {_value(_p(events, 'ttfe_ms', 'p95'))}"
-            if event_usable
+            if event_usable and protocol == "sse"
             else "N/A / N/A"
         )
         configured = events.get("connections", result.get("connections_requested")) if event_usable else None
         peak = events.get("peak_in_flight") if event_usable else None
-        connections_display = f"{_value(configured, 0)} / {_value(peak, 0)}"
+        average = events.get("average_in_flight") if event_usable else None
+        connections_display = (
+            f"{_value(configured, 0)} / {_value(peak, 0)} / {_value(average)}"
+        )
         lines.append(
-            f"| {platform.upper()} | {retrieval_display} | {throughput} | {ttfe} | "
-            f"{connections_display} | {_value(empty.get('qps'))} | {result.get('status', 'error')} |"
+            f"| {platform.upper()} | {retrieval_display} | {_value(protocol)} | "
+            f"{_value(events.get('qps')) if event_usable else 'N/A'} | {ttfb} | {ttfe} | "
+            f"{throughput} | {connections_display} | {_value(empty.get('qps'))} | "
+            f"{result.get('status', 'error')} |"
         )
 
     lines += [
@@ -1041,26 +1139,27 @@ def _make_report(
         "",
         "| Platform | Lenovo resource | Database-facing contract | Streaming contract |",
         "|---|---|---|---|",
-        "| MOI | `moi_stage1_lenovo_bench.embedding_results` | Native `SearchRAGChunks` CLI over MatrixOne | N/A in current local implementation |",
+        "| MOI | `moi_stage1_lenovo_bench.embedding_results` + official benchmark workspace | Native `SearchRAGChunks` CLI over MatrixOne (separate diagnostic) | Official Catalog `POST /api/v1/agents/a2a`, A2A SSE |",
         "| Dify | Dataset resource `DIFY_DATASET_ID` | `POST /v1/datasets/{id}/retrieve`, semantic search, rerank off | `POST /v1/chat-messages`, SSE |",
         "| FastGPT | Lenovo native app/dataset manifest | `POST /api/core/dataset/searchTest`, embedding mode, rerank off | `POST /api/v1/chat/completions`, SSE |",
-        "| MaxKB | Ready chunked-text knowledge resource | Admin `hit_test`, embedding mode; diagnostic contract | Published OpenAI-compatible app, current local contract returns JSON (`stream=false`) |",
+        "| MaxKB | Ready chunked-text knowledge resource | Admin `hit_test`, embedding mode; diagnostic contract | Published OpenAI-compatible app, SSE (`stream=true`) |",
         "",
         "## Metric definitions and methodology",
         "",
         "- **Retrieval latency**: end-to-end elapsed time for the direct retrieval request, including query embedding and local service/database overhead where that product contract performs embedding. It is the closest comparable database-path measurement available without instrumenting each product internally.",
-        "- **Event Throughput**: total parsed SSE/JSON response events divided by wall-clock batch time for the application transport requests.",
-        "- **TTFE**: time from request start to the first parsed SSE event (or first JSON response event).",
-        "- **Connections**: configured parallel workers and observed peak in-flight requests. Each request uses a fresh HTTP connection; this isolates request-level latency rather than connection-pool reuse.",
+        "- **Application QPS**: application-successful requests divided by wall-clock batch time. An HTTP 2xx stream containing an explicit `error` event is not successful.",
+        "- **TTFB / TTFE**: TTFB is time to the first response byte for JSON or SSE; TTFE is time to the first complete SSE event and is N/A for non-streaming JSON.",
+        "- **Event Throughput**: complete SSE events divided by wall-clock batch time. It is implementation-specific because products frame tokens and workflow state differently, so it must not be used for direct cross-product ranking.",
+        "- **Connections**: configured parallel workers and observed peak in-flight requests. Each request uses a fresh HTTP connection, so timings include connection setup and are not keep-alive latency.",
         "- **Empty Workflow QPS**: intentionally unsupported until each product has an explicit no-op workflow/application. Calling a real Lenovo RAG app with an empty prompt would measure retrieval/generation behavior, not an empty workflow.",
         "- Each platform receives the same ten query texts, exactly once per measured direct-retrieval and application track; one separate readiness warmup is not included in the ten samples. No answer text is scored or compared.",
         "",
         "## Robustness and limitations",
         "",
         "- The sample is random but fixed by the recorded seed; rerun with another seed for confidence intervals. Ten requests are suitable for a smoke/latency pass, not a production capacity claim.",
-        "- API streaming numbers include application orchestration, model/provider time, and transport buffering. They should not be read as pure vector-database latency.",
+        "- API streaming numbers include application orchestration, model/provider time, and transport buffering. They should not be read as pure vector-database latency. A Dify-style capacity test also requires a deterministic mock LLM rather than the external MaaS model used by this Lenovo pass.",
         "- The MaxKB retrieval call is an admin diagnostic `hit_test` contract, while the other direct retrieval calls are product API contracts; this difference is recorded to avoid overstating equivalence.",
-        "- MOI's CLI executes its own retrieval loop and reports MatrixFlow/MatrixOne retrieval latency; Event Throughput, TTFE, and API Connections are not applicable to this local implementation.",
+        "- MOI's Event Throughput, TTFE and API Connections come only from the official A2A/SSE data plane. The CLI is retained solely for direct MatrixFlow/MatrixOne retrieval latency and is not HTTP-wrapped.",
         "- A platform marked `partial`, `error`, or `skipped` needs a deployment/credential fix before cross-platform ranking.",
         "",
         "## Runtime status and blockers",
@@ -1118,8 +1217,8 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         )
         for platform, targets in api_targets.items()
     }
-    jobs["moi"] = lambda: _run_moi(
-        queries, environ, args.connections, args.timeout, output_dir
+    jobs["moi"] = lambda: _run_moi_with_official_api(
+        api_targets["moi"], queries, environ, args.connections, args.timeout, output_dir
     )
 
     results: dict[str, dict[str, Any]] = {}

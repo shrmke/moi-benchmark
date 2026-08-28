@@ -1,0 +1,113 @@
+{
+  "contract_name": "active_maas_provider_channel",
+  "provider": "maas",
+  "source_tag": "v4.15.6",
+  "source_commit": "3db33e93b78e75b37c93f7a6e3d0fafeafbfd256",
+  "deployment_images": {
+    "fastgpt": "ghcr.io/labring/fastgpt:v4.15.4",
+    "code_sandbox": "ghcr.io/labring/fastgpt-code-sandbox:v4.15.4"
+  },
+  "model_provider": {
+    "kind": "AI Proxy OpenAI channel",
+    "base_url": "https://api.modelarts-maas.com/v1",
+    "base_url_env": "MAAS_BASE_URL",
+    "authentication": "Authorization: Bearer ${MAAS_API_KEY}",
+    "language_model": "glm-5.2",
+    "embedding_model": "bge-m3",
+    "embedding_dimension": 1024,
+    "model_egress": "external"
+  },
+  "provider_channel_api": {
+    "fastgpt_proxy_base": "/api/aiproxy/api",
+    "authentication": {
+      "fastgpt_proxy": "root browser session",
+      "aiproxy_direct": "Authorization: Bearer ${AIPROXY_ADMIN_KEY}",
+      "upstream_maas": "channel payload key=${MAAS_API_KEY}"
+    },
+    "create": {
+      "method": "POST",
+      "fastgpt_path": "/api/aiproxy/api/createChannel",
+      "aiproxy_path": "/api/channel/",
+      "payload": {
+        "type": 1,
+        "name": "Huawei Cloud MaaS",
+        "base_url": "https://api.modelarts-maas.com/v1",
+        "models": ["glm-5.2", "bge-m3"],
+        "model_mapping": {},
+        "key": "${MAAS_API_KEY}",
+        "priority": 1
+      }
+    },
+    "list": {
+      "method": "GET",
+      "fastgpt_path": "/api/aiproxy/api/channels/all",
+      "aiproxy_path": "/api/channels/all"
+    },
+    "test": {
+      "fastgpt_method": "GET",
+      "fastgpt_path": "/api/core/ai/model/test",
+      "fastgpt_query": ["model", "channelId"],
+      "aiproxy_saved_method": "GET",
+      "aiproxy_saved_path": "/api/channel/{id}/test",
+      "aiproxy_preview_single_method": "POST",
+      "aiproxy_preview_single_path": "/api/channel/test",
+      "aiproxy_preview_single_required": ["key", "model", "type"],
+      "aiproxy_preview_all_method": "POST",
+      "aiproxy_preview_all_path": "/api/channel/test-all",
+      "aiproxy_preview_all_required": ["key", "type"]
+    },
+    "repair_existing": "PUT /api/channel/{id} only after a unique exact-name match; re-list and verify type/base_url/models"
+  },
+  "api": [
+    {
+      "operation": "create_dataset",
+      "method": "POST",
+      "path": "/api/core/dataset/create",
+      "content_type": "application/json",
+      "required": ["type", "name", "intro", "vectorModel", "agentModel"],
+      "response_data": "dataset id"
+    },
+    {
+      "operation": "create_isolated_app",
+      "method": "POST",
+      "path": "/api/core/app/create",
+      "content_type": "application/json",
+      "required": ["name", "type", "modules", "edges"],
+      "maas_invariant": "app datasetSearchNode references only the dataset created in the same smoke run"
+    },
+    {
+      "operation": "upload_local_file",
+      "method": "POST",
+      "path": "/api/core/dataset/collection/create/localFile",
+      "content_type": "multipart/form-data",
+      "required": ["file", "data"],
+      "data_json_required": ["datasetId", "trainingType"],
+      "response_data": "{collectionId,results}"
+    },
+    {
+      "operation": "collection_readiness",
+      "method": "POST",
+      "path": "/api/core/dataset/collection/listV2",
+      "content_type": "application/json",
+      "required": ["datasetId", "offset", "pageSize"],
+      "ready_condition": "every item has trainingAmount=0, activeTrainingAmount=0, finalErrorAmount=0, hasError=false"
+    },
+    {
+      "operation": "direct_retrieval",
+      "method": "POST",
+      "path": "/api/core/dataset/searchTest",
+      "content_type": "application/json",
+      "required": ["datasetId", "text"],
+      "response_data": "{list,duration,limit,searchMode,usingReRank}"
+    },
+    {
+      "operation": "native_qa",
+      "method": "POST",
+      "path": "/api/v1/chat/completions",
+      "content_type": "application/json",
+      "required": ["appId", "chatId", "stream", "detail", "messages"],
+      "response": "OpenAI-compatible choices plus responseData when detail=true",
+      "thinking": {"type": "disabled", "applies_to": "glm-5.2"}
+    }
+  ]
+}

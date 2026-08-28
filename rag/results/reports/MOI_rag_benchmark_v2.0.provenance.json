@@ -1,0 +1,480 @@
+{
+  "campaign": {
+    "full_merge_check": {
+      "path": "runs/bench-v0.3.1-merged/full-merge-check.json",
+      "sha256": "d83924222d45b34025c2a4bb7e28e788504d59bfdb645450ff3f7069238570f4"
+    },
+    "platform_runs": {
+      "dify": {
+        "planned_questions": 275,
+        "reported_metrics": {
+          "answer_relevance": 0.554909,
+          "contains_gold": 0.243636,
+          "contradiction_free": 0.871273,
+          "instruction_compliance": 0.589091,
+          "mrr": 0.774353,
+          "normalized_em": 0.003636,
+          "recall_at_1": 0.543396,
+          "recall_at_10": 0.833333,
+          "recall_at_3": 0.7,
+          "recall_at_5": 0.768553,
+          "response_claim_correctness": 0.470204,
+          "runtime_context_faithfulness": 0.508041,
+          "strict_unanswerable_success": 0.833333,
+          "token_f1": 0.241242,
+          "unsupported_claim_rate": 0.606436
+        },
+        "run_id": "20260827-dify-v031-merged-275",
+        "source_artifacts": {
+          "judge_start_record": {
+            "path": "runs/bench-v0.3.1-merged/20260827-dify-v031-merged-275/judge/judge-start-record.json",
+            "sha256": "a5a60b2eca26ea8c30bcc16a89df49254d5a763cb265183a8e648cf351a7ade0"
+          },
+          "judge_summary": {
+            "path": "runs/bench-v0.3.1-merged/20260827-dify-v031-merged-275/judge/judge-summary.json",
+            "sha256": "46e5466df611c22fd99ff111c11e57ed6c89e7cf097d99d4d6eadf044f6b91c8"
+          },
+          "judge_terminal_ledger": {
+            "path": "runs/bench-v0.3.1-merged/20260827-dify-v031-merged-275/judge/judge-terminal-ledger.jsonl",
+            "rows": 275,
+            "sha256": "d0cbf9c6fe98751de9da14ab4f0e3e9a6441c2372ae96ea87e98939678e12e9c"
+          },
+          "metrics": {
+            "path": "runs/bench-v0.3.1-merged/20260827-dify-v031-merged-275/metrics-v1-aggregate.json",
+            "sha256": "4f38ada3e5fb095e6f028fccf4bfd0a62f1039a224ca467ccbb1ee579f798a89"
+          },
+          "package_record": {
+            "path": "runs/bench-v0.3.1-merged/20260827-dify-v031-merged-275/package-record.json",
+            "sha256": "a42af8861aed3ed17f6362ef905a80428f9f0d56b8e1454f469a74a384bc03ce"
+          },
+          "platform_contract": {
+            "path": "runs/bench-v0.3.1-merged/20260827-dify-v031-merged-275/platform-contract.json",
+            "sha256": "5475776e7be70f065631effc77f5635dbba4802e5bff2a57321030899e6df18a"
+          },
+          "start_record": {
+            "path": "runs/bench-v0.3.1-merged/20260827-dify-v031-merged-275/start-record.json",
+            "sha256": "485cc2a8613e19134aef3c0e500bc89e01ce5ed06238095a3a11314fb348d4b1"
+          },
+          "terminal_ledger": {
+            "path": "runs/bench-v0.3.1-merged/20260827-dify-v031-merged-275/terminal-ledger.jsonl",
+            "rows": 550,
+            "sha256": "d994ccd6b15cfd449df111e9492f40c3db027663ebe6c3994d20f3c2603158af"
+          }
+        },
+        "source_root": "runs/bench-v0.3.1-merged/20260827-dify-v031-merged-275",
+        "status": "COMPLETE",
+        "terminal_questions": 275
+      },
+      "fastgpt": {
+        "planned_questions": 275,
+        "reported_metrics": {
+          "answer_relevance": 0.570909,
+          "contains_gold": 0.134545,
+          "contradiction_free": 0.803636,
+          "instruction_compliance": 0.587273,
+          "mrr": 0.781253,
+          "normalized_em": 0,
+          "recall_at_1": 0.560692,
+          "recall_at_10": 0.856604,
+          "recall_at_3": 0.72327,
+          "recall_at_5": 0.77673,
+          "response_claim_correctness": 0.509796,
+          "runtime_context_faithfulness": 0.513878,
+          "strict_unanswerable_success": 0.866667,
+          "token_f1": 0.194915,
+          "unsupported_claim_rate": 0.610909
+        },
+        "run_id": "20260827-fastgpt-v031-merged-275",
+        "source_artifacts": {
+          "judge_start_record": {
+            "path": "runs/bench-v0.3.1-merged/20260827-fastgpt-v031-merged-275/judge/judge-start-record.json",
+            "sha256": "af0409f02430735e33fe28529f979df7c8f9351f2045985e193427cf0ce7fb17"
+          },
+          "judge_summary": {
+            "path": "runs/bench-v0.3.1-merged/20260827-fastgpt-v031-merged-275/judge/judge-summary.json",
+            "sha256": "cb0853c9b549afcd05d93fb30e24d799cf93051918e7e3e451deaf9dd4d9ae8b"
+          },
+          "judge_terminal_ledger": {
+            "path": "runs/bench-v0.3.1-merged/20260827-fastgpt-v031-merged-275/judge/judge-terminal-ledger.jsonl",
+            "rows": 275,
+            "sha256": "854b7c077de39696e7bdc5752341babbc164ce536bcf8a1a138eaaa97d64e8d7"
+          },
+          "metrics": {
+            "path": "runs/bench-v0.3.1-merged/20260827-fastgpt-v031-merged-275/metrics-v1-aggregate.json",
+            "sha256": "6873723d7837ae65bcced4e04a41f4c21f6bc7b07ac79e9c2653638793c6ae46"
+          },
+          "package_record": {
+            "path": "runs/bench-v0.3.1-merged/20260827-fastgpt-v031-merged-275/package-record.json",
+            "sha256": "a42af8861aed3ed17f6362ef905a80428f9f0d56b8e1454f469a74a384bc03ce"
+          },
+          "platform_contract": {
+            "path": "runs/bench-v0.3.1-merged/20260827-fastgpt-v031-merged-275/platform-contract.json",
+            "sha256": "01b993033deb30272af694114a59293df438bfc3fe57538308ffd1c8cc01ade8"
+          },
+          "start_record": {
+            "path": "runs/bench-v0.3.1-merged/20260827-fastgpt-v031-merged-275/start-record.json",
+            "sha256": "9a20da830d4fb51ba18f6d179be2e01390667a8f81f454007ca4cdc139826ca6"
+          },
+          "terminal_ledger": {
+            "path": "runs/bench-v0.3.1-merged/20260827-fastgpt-v031-merged-275/terminal-ledger.jsonl",
+            "rows": 550,
+            "sha256": "91d7ee6600bed67421f9554ee93ee91ddddc406034a61e6460142f9826b90c86"
+          }
+        },
+        "source_root": "runs/bench-v0.3.1-merged/20260827-fastgpt-v031-merged-275",
+        "status": "COMPLETE",
+        "terminal_questions": 275
+      },
+      "maxkb": {
+        "planned_questions": 275,
+        "reported_metrics": {
+          "answer_relevance": 0.693091,
+          "contains_gold": 0.269091,
+          "contradiction_free": 0.928364,
+          "instruction_compliance": 0.716364,
+          "mrr": 0.775423779574723,
+          "normalized_em": 0.010909,
+          "recall_at_1": 0.5506289308176106,
+          "recall_at_10": 0.862264150943396,
+          "recall_at_3": 0.7308176100628929,
+          "recall_at_5": 0.7990566037735846,
+          "response_claim_correctness": 0.657959,
+          "runtime_context_faithfulness": 0.667347,
+          "strict_unanswerable_success": 0.9,
+          "token_f1": 0.290029,
+          "unsupported_claim_rate": 0.724727
+        },
+        "retrieval_audit": {
+          "contract": "diagnostic_admin_contract",
+          "duplicate_source_document_rows": 110,
+          "eligible_n": 265,
+          "latency_ms_p50": 2432.727,
+          "latency_ms_p95": 6776.157,
+          "latency_ms_p99": 17502.222,
+          "no_gold_n": 10,
+          "orderings": {
+            "api_return_order": {
+              "hit_at_1": 0.16981132075471697,
+              "hit_at_10": 0.8905660377358491,
+              "hit_at_3": 0.4075471698113208,
+              "hit_at_5": 0.5471698113207547,
+              "mrr": 0.34657382449835306,
+              "recall_at_1": 0.13805031446540883,
+              "recall_at_10": 0.862264150943396,
+              "recall_at_3": 0.30943396226415076,
+              "recall_at_5": 0.4578616352201259
+            },
+            "comprehensive_score_desc": {
+              "hit_at_1": 0.7132075471698113,
+              "hit_at_10": 0.8905660377358491,
+              "hit_at_3": 0.8301886792452831,
+              "hit_at_5": 0.8566037735849057,
+              "mrr": 0.775423779574723,
+              "recall_at_1": 0.5506289308176106,
+              "recall_at_10": 0.862264150943396,
+              "recall_at_3": 0.7308176100628929,
+              "recall_at_5": 0.7990566037735846
+            }
+          },
+          "planned_n": 275,
+          "score_descending_rows": 6,
+          "strict_comparable": false
+        },
+        "retrieval_method": "diagnostic_admin_contract + offline comprehensive_score descending",
+        "run_id": "20260827-maxkb-v031-merged-275",
+        "source_artifacts": {
+          "judge_start_record": {
+            "path": "runs/bench-v0.3.1-merged/20260827-maxkb-v031-merged-275/judge/judge-start-record.json",
+            "sha256": "0a2843c61595e0e7bf235091b5dc1fe663370a16400292a7f3001ef5d024d47f"
+          },
+          "judge_summary": {
+            "path": "runs/bench-v0.3.1-merged/20260827-maxkb-v031-merged-275/judge/judge-summary.json",
+            "sha256": "b2767968c9b54d07dcf93b77baf3b67916b26ceceb9593e9fea5311d6a5f1475"
+          },
+          "judge_terminal_ledger": {
+            "path": "runs/bench-v0.3.1-merged/20260827-maxkb-v031-merged-275/judge/judge-terminal-ledger.jsonl",
+            "rows": 279,
+            "sha256": "144c77c43376df1470a94932c7ed825eb5841a58903344e923122c0b51b5e147"
+          },
+          "metrics": {
+            "path": "runs/bench-v0.3.1-merged/20260827-maxkb-v031-merged-275/metrics-v1-aggregate.json",
+            "sha256": "487fa3c37f68fbfaa2e86e78af0a9b067df44ea456d004ce22348136908a59f4"
+          },
+          "package_record": {
+            "path": "runs/bench-v0.3.1-merged/20260827-maxkb-v031-merged-275/package-record.json",
+            "sha256": "a42af8861aed3ed17f6362ef905a80428f9f0d56b8e1454f469a74a384bc03ce"
+          },
+          "platform_contract": {
+            "path": "runs/bench-v0.3.1-merged/20260827-maxkb-v031-merged-275/platform-contract.json",
+            "sha256": "4d48cb6e7081dc80402b68c1f4102ddf856af7c41a6e8328205043e719b278d3"
+          },
+          "start_record": {
+            "path": "runs/bench-v0.3.1-merged/20260827-maxkb-v031-merged-275/start-record.json",
+            "sha256": "a8c3acf2a4e8824b5882b5ae8e0c75fb7fed1a48ee2690382b95664c078627b1"
+          },
+          "terminal_ledger": {
+            "path": "runs/bench-v0.3.1-merged/20260827-maxkb-v031-merged-275/terminal-ledger.jsonl",
+            "rows": 550,
+            "sha256": "ab7772c65ed2124c0e942f290b9716ef165e1fd35bdc0d1762e459fcb47b9de0"
+          }
+        },
+        "source_root": "runs/bench-v0.3.1-merged/20260827-maxkb-v031-merged-275",
+        "status": "COMPLETE",
+        "terminal_questions": 275
+      },
+      "moi": {
+        "planned_questions": 275,
+        "reported_metrics": {
+          "answer_relevance": 0.684727,
+          "contains_gold": 0.247273,
+          "contradiction_free": 0.869091,
+          "instruction_compliance": 0.741818,
+          "mrr": 0.777998,
+          "normalized_em": 0.003636,
+          "recall_at_1": 0.594969,
+          "recall_at_10": 0.619497,
+          "recall_at_3": 0.600629,
+          "recall_at_5": 0.600629,
+          "response_claim_correctness": 0.610204,
+          "runtime_context_faithfulness": 0.627224,
+          "strict_unanswerable_success": 0.733333,
+          "token_f1": 0.300493,
+          "unsupported_claim_rate": 0.649709
+        },
+        "run_id": "20260827-moi-v031-merged-275",
+        "source_artifacts": {
+          "judge_start_record": {
+            "path": "runs/bench-v0.3.1-merged/20260827-moi-v031-merged-275/judge/judge-start-record.json",
+            "sha256": "719652b83eb339cb55637ab66e9cd70f0061335e880f2bce693f4142d1e8d222"
+          },
+          "judge_summary": {
+            "path": "runs/bench-v0.3.1-merged/20260827-moi-v031-merged-275/judge/judge-summary.json",
+            "sha256": "68d8c8fbb1a2dc661d44ec8420966a30114a0cc8b93099253931a7b267337f46"
+          },
+          "judge_terminal_ledger": {
+            "path": "runs/bench-v0.3.1-merged/20260827-moi-v031-merged-275/judge/judge-terminal-ledger.jsonl",
+            "rows": 275,
+            "sha256": "5215bdc994040ff8d9900608f24387b76ec2c29c94f5590e106b382913ffc14b"
+          },
+          "metrics": {
+            "path": "runs/bench-v0.3.1-merged/20260827-moi-v031-merged-275/metrics-v1-aggregate.json",
+            "sha256": "41f203003ffb6a6f7db5ed16b90fe651547823294308da103a511a2a2eff2b25"
+          },
+          "package_record": {
+            "path": "runs/bench-v0.3.1-merged/20260827-moi-v031-merged-275/package-record.json",
+            "sha256": "a42af8861aed3ed17f6362ef905a80428f9f0d56b8e1454f469a74a384bc03ce"
+          },
+          "platform_contract": {
+            "path": "runs/bench-v0.3.1-merged/20260827-moi-v031-merged-275/platform-contract.json",
+            "sha256": "b95d838c113d38773e274c7931ce68f1d50df9c27356a0c9cb2051629a7f9fea"
+          },
+          "start_record": {
+            "path": "runs/bench-v0.3.1-merged/20260827-moi-v031-merged-275/start-record.json",
+            "sha256": "2835a497298ef393e2fb570f9556961bc24e464a6c777262c0d17d1acc9bc46f"
+          },
+          "terminal_ledger": {
+            "path": "runs/bench-v0.3.1-merged/20260827-moi-v031-merged-275/terminal-ledger.jsonl",
+            "rows": 550,
+            "sha256": "799b41fc514b9ddeb55e46a826dd164a4c4fd6cc72c0e9dcd2a0343b06fd9e43"
+          }
+        },
+        "source_root": "runs/bench-v0.3.1-merged/20260827-moi-v031-merged-275",
+        "status": "COMPLETE",
+        "terminal_questions": 275
+      }
+    },
+    "root": "runs/bench-v0.3.1-merged",
+    "runner_merge_check": {
+      "path": "runs/bench-v0.3.1-merged/runner-merge-check.json",
+      "sha256": "d158cf0dc48ffbbed0dbaf7cbc9fe71fe08f931a4cd0fdcdcd65aa6759cfbbe4"
+    },
+    "summary": {
+      "path": "runs/bench-v0.3.1-merged/campaign-summary.json",
+      "sha256": "d2cf85121cdbb31ca2607a70f4fb5e8d52e83d320c0eb2c1cd41070d49165702"
+    }
+  },
+  "contract": {
+    "embedding": {
+      "dimension": 1024,
+      "model": "bge-m3",
+      "provider": "maas"
+    },
+    "judge": {
+      "max_tokens": 2048,
+      "model": "deepseek-v4-flash",
+      "provider": "deepseek-official",
+      "temperature": 0,
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "judge_implementation": {
+      "path": "local-rag-platforms/scripts/evaluation/competitor_eval_judge.py",
+      "sha256": "ac42913180ea3ab643d5ccbe7bf512a669c5a504e19d95714054f17fbe2a46af"
+    },
+    "metric_registry": {
+      "path": "local-rag-platforms/scripts/evaluation/competitor_eval_metric_registry.py",
+      "sha256": "bf20767eb8dae414f8ec74cab9aff3da112918afb87ed7cbcce10fcfd57154eb"
+    },
+    "metrics_implementation": {
+      "path": "local-rag-platforms/scripts/evaluation/competitor_eval_metrics.py",
+      "sha256": "75829d3471ed6a7b5efb3f595e806041a3ddee3c6277344404c4f637337c4237"
+    },
+    "platform_contract": {
+      "path": "local-rag-platforms/scripts/evaluation/competitor_eval_platform_contracts.json",
+      "sha256": "c9b5a5ec18d9dfa8cede8ead0cd4175dce0d96cfd6978eda5b5eaea250d933b0"
+    },
+    "provider_policy": "deepseek_text_maas_embedding",
+    "report_builder": {
+      "path": "scripts/tools/build_moi_rag_benchmark_report_v2.py",
+      "sha256": "2ba5ad20de0c12e2d0ff9aa1d195be4f688b9c21addd12065c742a5660bf7931"
+    },
+    "text_generation": {
+      "model": "deepseek-v4-flash",
+      "provider": "deepseek-official",
+      "thinking": {
+        "type": "disabled"
+      }
+    }
+  },
+  "dataset": {
+    "answerable_questions": 245,
+    "artifacts": {
+      "corpus": {
+        "path": "datasets/moi-rag-bench-v0.3.1-qa-revision/ready_for_eval/corpus.jsonl",
+        "rows": 297,
+        "sha256": "4e1ec568389b221f2942cc462edb3daf5767f2c3243355c93d6bdd667c5410a0"
+      },
+      "gold": {
+        "path": "datasets/moi-rag-bench-v0.3.1-qa-revision/ready_for_eval/gold.jsonl",
+        "rows": 275,
+        "sha256": "6846bda0ee3dc7c39d6e0a897439e63cc2d605f33e3c7f09403f3dc6a27d3ed4"
+      },
+      "manifest": {
+        "path": "datasets/moi-rag-bench-v0.3.1-qa-revision/ready_for_eval/manifest.json",
+        "sha256": "a0e8ff1db8f66e4c501080b1a582839de33dacbf4cde4b5dcec22844831aa8f9"
+      },
+      "questions": {
+        "path": "datasets/moi-rag-bench-v0.3.1-qa-revision/ready_for_eval/questions.jsonl",
+        "rows": 275,
+        "sha256": "4f765efacd14379b55f18ee93357f14c0f13ca3cc15ec629c16c2bb3634beaeb"
+      },
+      "revision_summary": {
+        "path": "datasets/moi-rag-bench-v0.3.1-qa-revision/qa-revision-summary.json",
+        "sha256": "04e67334b589a95a9c2ca06d3cd8e16a0b532eab11f4fc9f2c03f8747d624078"
+      },
+      "text_only_signoff": {
+        "path": "datasets/moi-rag-bench-v0.3.1-qa-revision/text-only-signoff.jsonl",
+        "rows": 275,
+        "sha256": "ab9b69da4e4323fe98f413987cecbcf2df3b149cc242007fe58023f5b097b2dc"
+      },
+      "validation": {
+        "path": "datasets/moi-rag-bench-v0.3.1-qa-revision/validation.json",
+        "sha256": "a6ad00ce55d0d4cc1addb3e7e08c3ae5a460d465f54fe0e55ea39680f30b71a1"
+      }
+    },
+    "dataset_id": "moi-rag-bench-v0.3.1-qa-revision",
+    "documents": 297,
+    "questions": 275,
+    "unanswerable_questions": 30
+  },
+  "denominators": {
+    "answerable_judge": 245,
+    "lexical_and_general_judge": 275,
+    "retrieval_with_gold_documents": 265,
+    "run_ledger": 275,
+    "strict_unanswerable": 30
+  },
+  "judge_reaggregation": {
+    "answerable_dimensions": "245/245 per platform",
+    "general_dimensions": "275/275 per platform",
+    "legacy_embedded_report_pointer": "SUPERSEDED_BY_REPORT_HASH_IN_THIS_MANIFEST",
+    "source": {
+      "path": "runs/bench-v0.3.1-merged/recovery/judge-applicability-reaggregation-20260828/manifest.json",
+      "sha256": "c0ca546cc54511a46f877427a7a26fa2e27b015aa607305bc9df50783e321f59"
+    },
+    "status": "COMPLETE",
+    "strict_unanswerable": "30/30 per platform"
+  },
+  "recorded_at": "2026-08-28",
+  "report": {
+    "path": "results/reports/MOI_rag_benchmark_v2.0.md",
+    "sha256": "098b18be42207bb20d31db412b71044070979fa9608623bbba76e39056ba9e86"
+  },
+  "retention": {
+    "policy": "Compact tracked snapshot; raw datasets and run ledgers remain in the local artifact store.",
+    "verification": "Recompute SHA-256 for any retained source path and compare it with this manifest before regenerating the report."
+  },
+  "schema": "moi-rag-benchmark-report-provenance-v1",
+  "service_delivery": {
+    "event_capacity_connections_8": {
+      "dify": {
+        "average_in_flight": 7.256,
+        "e2e_avg_ms": 16149.317,
+        "first_sse_event_p95_ms": 21255.682,
+        "little_law_qps": 0.44930692734559613,
+        "request_qps": 0.45,
+        "success_rate": 1.0
+      },
+      "fastgpt": {
+        "average_in_flight": 7.954,
+        "e2e_avg_ms": 801.224,
+        "first_sse_event_p95_ms": 130.28,
+        "little_law_qps": 9.92731121384282,
+        "request_qps": 9.926,
+        "success_rate": 1.0
+      },
+      "maxkb": {
+        "average_in_flight": 7.988,
+        "e2e_avg_ms": 927.673,
+        "first_sse_event_p95_ms": 578.309,
+        "little_law_qps": 8.610792811691189,
+        "request_qps": 8.616,
+        "success_rate": 1.0
+      },
+      "moi": {
+        "average_in_flight": 7.848,
+        "e2e_avg_ms": 21638.417,
+        "first_sse_event_p95_ms": 3177.837,
+        "little_law_qps": 0.3626882687398066,
+        "request_qps": 0.364,
+        "success_rate": 1.0
+      }
+    },
+    "lenovo_query_sha256": "e4733b0e6d612620519198af613114fb699f982580c8d9e532e937268d7141f8",
+    "lenovo_retrieval_10_query": {
+      "dify": {
+        "actual_connections": 4,
+        "retrieval_p50_ms": 1369.693,
+        "retrieval_p95_ms": 3057.914,
+        "retrieval_qps": 2.03,
+        "retrieval_success": "10/10"
+      },
+      "fastgpt": {
+        "actual_connections": 4,
+        "retrieval_p50_ms": 443.851,
+        "retrieval_p95_ms": 547.966,
+        "retrieval_qps": 8.415,
+        "retrieval_success": "10/10"
+      },
+      "maxkb": {
+        "actual_connections": 4,
+        "retrieval_p50_ms": 2098.449,
+        "retrieval_p95_ms": 3296.306,
+        "retrieval_qps": 1.465,
+        "retrieval_success": "10/10"
+      },
+      "moi": {
+        "actual_connections": 1,
+        "retrieval_p50_ms": 981.858,
+        "retrieval_p95_ms": 2882.385,
+        "retrieval_qps": 0.314,
+        "retrieval_success": "10/10"
+      }
+    },
+    "source": {
+      "path": "runs/api-test-final-20260826-v2/artifact.json",
+      "sha256": "a6d5be7f07d63f8189354cc0c844ef1831a012a2278a9a735df99470474ca241"
+    }
+  }
+}

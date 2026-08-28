@@ -13,6 +13,7 @@ import json
 import os
 import platform
 import secrets
+import socket
 import subprocess
 import sys
 import time
@@ -167,6 +168,110 @@ def preflight() -> dict[str, Any]:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    return result
+
+
+def _safe_endpoint(value: str) -> str:
+    """Return an endpoint suitable for artifacts without userinfo or queries."""
+
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.hostname or parsed.username or parsed.password:
+        return "<invalid-endpoint>"
+    try:
+        port = f":{parsed.port}" if parsed.port is not None else ""
+    except ValueError:
+        return "<invalid-endpoint>"
+    path = parsed.path or "/"
+    return f"{parsed.scheme}://{parsed.hostname}{port}{path}"
+
+
+def _http_readiness(url: str, timeout: float) -> dict[str, Any]:
+    check: dict[str, Any] = {
+        "name": "http",
+        "type": "http",
+        "endpoint": _safe_endpoint(url),
+        "status": "BLOCKED",
+        "ready": False,
+    }
+    if check["endpoint"] == "<invalid-endpoint>":
+        check["error"] = "INVALID_ENDPOINT"
+        return check
+    try:
+        request = Request(url, headers={"Accept": "application/json, text/plain, */*", "User-Agent": "MOI-Deployment-Readiness/1"})
+        with urlopen(request, timeout=timeout) as response:
+            status_code = int(response.getcode())
+        check["http_status"] = status_code
+        check["ready"] = 200 <= status_code < 400
+        check["status"] = "READY" if check["ready"] else "BLOCKED"
+        if not check["ready"]:
+            check["error"] = f"HTTP_{status_code}"
+    except HTTPError as exc:
+        check["http_status"] = int(exc.code)
+        check["error"] = f"HTTP_{exc.code}"
+    except (URLError, OSError, TimeoutError, ValueError) as exc:
+        check["error"] = type(exc).__name__
+    return check
+
+
+def _tcp_readiness(host: str, port: int, timeout: float) -> dict[str, Any]:
+    endpoint = f"tcp://{host}:{port}"
+    check: dict[str, Any] = {
+        "name": "tcp",
+        "type": "tcp",
+        "endpoint": endpoint,
+        "status": "BLOCKED",
+        "ready": False,
+    }
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            pass
+    except (OSError, TimeoutError, ValueError) as exc:
+        check["error"] = type(exc).__name__
+        return check
+    check["status"] = "READY"
+    check["ready"] = True
+    return check
+
+
+def readiness(
+    system_id: str,
+    *,
+    runtime_root: Path = RUNTIME_ROOT,
+    url: str | None = None,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Run a read-only service probe and persist a machine-readable result."""
+
+    config = service_config(system_id)
+    health = config.get("health") or {}
+    health_type = str(health.get("type", "")).lower()
+    if url is not None or health_type == "http":
+        check = _http_readiness(url or str(health.get("url", "")), timeout)
+    elif health_type == "tcp":
+        check = _tcp_readiness(str(health.get("host", "127.0.0.1")), int(health.get("port", 0)), timeout)
+    else:
+        check = {
+            "name": "health-contract",
+            "type": "unknown",
+            "endpoint": "<not-configured>",
+            "status": "BLOCKED",
+            "ready": False,
+            "error": "HEALTH_CONTRACT_MISSING",
+        }
+
+    result: dict[str, Any] = {
+        "schema": "moi-deployment-readiness-v1",
+        "system_id": system_id,
+        "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "version": config.get("version") or config.get("tag"),
+        "image": config.get("image"),
+        "ready": bool(check.get("ready")),
+        "status": "READY" if check.get("ready") else "BLOCKED",
+        "checks": [check],
+    }
+    output = Path(runtime_root) / system_id / "logs" / "readiness.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return result
 
 
@@ -395,7 +500,7 @@ def record_event(system_id: str, event: str, status: str, reason: str | None, de
     return item
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="prepare_local_services")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("preflight", help="record Docker/Colima host facts")
@@ -403,6 +508,11 @@ def main() -> int:
     prepare_parser.add_argument("system", choices=("dify_local", "fastgpt_local", "ragflow_local", "maxkb_local"))
     record_parser = sub.add_parser("record", help="record source, compose, and image facts")
     record_parser.add_argument("system", choices=("dify_local", "fastgpt_local", "ragflow_local", "maxkb_local"))
+    readiness_parser = sub.add_parser("readiness", help="write a machine-readable read-only service readiness result")
+    readiness_parser.add_argument("system", choices=("moi_matrixone", "dify_local", "fastgpt_local", "ragflow_local", "maxkb_local"))
+    readiness_parser.add_argument("--url", help="override the configured HTTP health endpoint")
+    readiness_parser.add_argument("--runtime-root", type=Path, default=RUNTIME_ROOT)
+    readiness_parser.add_argument("--timeout", type=float, default=5.0)
     image_parser = sub.add_parser("inspect-image", help="record a registry image manifest without pulling it")
     image_parser.add_argument("system", choices=("dify_local", "fastgpt_local", "ragflow_local", "maxkb_local"))
     image_parser.add_argument("image")
@@ -422,13 +532,17 @@ def main() -> int:
     secret_parser = sub.add_parser("set-secret", help="store a secret read from stdin in the ignored credential file")
     secret_parser.add_argument("system", choices=("dify_local", "fastgpt_local", "ragflow_local", "maxkb_local"))
     secret_parser.add_argument("name")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.command == "preflight":
         preflight()
     elif args.command == "prepare":
         prepare(args.system)
     elif args.command == "record":
         record(args.system)
+    elif args.command == "readiness":
+        result = readiness(args.system, runtime_root=args.runtime_root, url=args.url, timeout=args.timeout)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["ready"] else 1
     elif args.command == "inspect-image":
         inspect_image(args.system, args.image, args.record_name)
     elif args.command == "record-event":

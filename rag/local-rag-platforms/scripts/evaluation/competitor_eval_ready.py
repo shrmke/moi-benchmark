@@ -72,18 +72,18 @@ DATASET_ALIASES = {
 
 PROVIDER_SELECTION = {
     "text": {
-        "provider": "qianfan",
-        "display_name": "Qianfan",
-        "model": "deepseek-v4-flash",
+        "provider": "maas",
+        "display_name": "MaaS",
+        "model": "glm-5.2",
     },
     "multimodal": {
-        "provider": "qianfan",
-        "display_name": "Qianfan",
-        "model": "qwen3.5-35b-a3b",
+        "provider": "maas",
+        "display_name": "MaaS",
+        "model": "Qwen2.5-VL-72B-32K",
     },
     "embedding": {
-        "provider": "huawei-maas",
-        "display_name": "Huawei MaaS",
+        "provider": "maas",
+        "display_name": "MaaS",
         "model": "bge-m3",
         "dimension": 1024,
     },
@@ -1001,11 +1001,11 @@ def _start_template(manifest: Mapping[str, Any], artifacts: Mapping[str, Any]) -
         "pipeline": {
             "parser": "platform_native_or_recorded",
             "chunking": "platform_native_or_recorded",
-            "embedding": "Huawei MaaS/bge-m3/1024",
+            "embedding": "MaaS/bge-m3/1024",
             "retriever": "platform_native_or_recorded",
             "reranker": "disabled|recorded",
-            "generator": "Qianfan/deepseek-v4-flash",
-            "multimodal_generator": "Qianfan/qwen3.5-35b-a3b",
+            "generator": "MaaS/glm-5.2",
+            "multimodal_generator": "MaaS/Qwen2.5-VL-72B-32K",
             "judge": "recorded_or_N/A",
             "prompt_hash": "sha256:UNKNOWN",
             "top_k": [1, 3, 5, 10],

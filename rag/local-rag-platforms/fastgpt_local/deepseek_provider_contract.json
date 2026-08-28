@@ -1,0 +1,44 @@
+{
+  "contract_name": "official_deepseek_text_channel",
+  "provider": "deepseek-official",
+  "source_tag": "deepseek-openai-compatible",
+  "model_provider": {
+    "kind": "AI Proxy OpenAI channel",
+    "base_url": "https://api.deepseek.com",
+    "base_url_env": "DEEPSEEK_BASE_URL",
+    "authentication": "Authorization: Bearer ${DEEPSEEK_API_KEY_NEW}",
+    "language_model": "deepseek-v4-flash",
+    "model_egress": "external"
+  },
+  "provider_channel_api": {
+    "fastgpt_proxy_base": "/api/aiproxy/api",
+    "authentication": {
+      "aiproxy_direct": "Authorization: Bearer ${AIPROXY_ADMIN_KEY}",
+      "upstream_deepseek": "channel payload key=${DEEPSEEK_API_KEY_NEW}"
+    },
+    "create": {
+      "method": "POST",
+      "fastgpt_path": "/api/aiproxy/api/createChannel",
+      "aiproxy_path": "/api/channel/",
+      "payload": {
+        "type": 1,
+        "name": "DeepSeek Official",
+        "base_url": "https://api.deepseek.com",
+        "models": ["deepseek-v4-flash"],
+        "model_mapping": {},
+        "key": "${DEEPSEEK_API_KEY_NEW}",
+        "priority": 1
+      }
+    },
+    "list": {
+      "method": "GET",
+      "fastgpt_path": "/api/aiproxy/api/channels/all",
+      "aiproxy_path": "/api/channels/all"
+    },
+    "test": {
+      "saved_method": "GET",
+      "saved_path": "/api/channel/{id}/test",
+      "repair_existing": "PUT /api/channel/{id} only after a unique exact-name match"
+    }
+  }
+}

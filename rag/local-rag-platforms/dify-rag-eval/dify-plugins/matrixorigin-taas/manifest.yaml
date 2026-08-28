@@ -1,4 +1,4 @@
-version: 0.0.10
+version: 0.0.11
 type: plugin
 author: matrixorigin
 name: matrixorigin_taas
@@ -18,10 +18,6 @@ resource:
       llm: false
 plugins:
   models:
-    - provider/huawei_maas.yaml
-    # Dify's current plugin-daemon management API exposes one model provider
-    # per plugin package. Keep the legacy provider last so existing datasets
-    # bound to matrixorigin_taas remain runnable after adding Huawei MaaS.
     - provider/matrixorigin_taas.yaml
 meta:
   version: 0.0.1

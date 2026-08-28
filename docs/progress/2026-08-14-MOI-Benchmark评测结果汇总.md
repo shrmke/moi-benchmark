@@ -1,6 +1,6 @@
 # MOI Benchmark 评测结果汇总（2026-08-14）
 
-> 汇报范围：Astra、Memoria、文档解析、信息提取、NL2SQL、RAG。六项评测均已完成。Morpheus 等其他评测待结果更新后另行补充。
+> 汇报范围：Astra、Memoria、文档解析、信息提取、NL2SQL、RAG。六项评测均已完成。ARAG、Morpheus 等其他评测待结果更新后另行补充。
 
 ## 1. 总览
 

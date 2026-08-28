@@ -1,0 +1,31 @@
+[
+  {
+    "model": "deepseek-v4-flash",
+    "metadata": {
+      "type": "llm",
+      "isCustom": true,
+      "isActive": true,
+      "provider": "OpenAI",
+      "model": "deepseek-v4-flash",
+      "name": "DeepSeek Official deepseek-v4-flash",
+      "maxContext": 32768,
+      "maxResponse": 8192,
+      "quoteMaxToken": 24000,
+      "maxTemperature": 1,
+      "charsPointsPrice": 0,
+      "censor": false,
+      "vision": false,
+      "video": false,
+      "reasoning": false,
+      "reasoningEffort": false,
+      "toolChoice": false,
+      "functionCall": false,
+      "defaultConfig": {
+        "thinking": {
+          "type": "disabled"
+        }
+      },
+      "fieldMap": {}
+    }
+  }
+]

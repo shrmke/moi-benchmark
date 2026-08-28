@@ -225,11 +225,19 @@ func TestPostOpenAIJSONRetriesTransient405(t *testing.T) {
 }
 
 func TestGenerateAnswerSendsConfiguredThinkingMode(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
+	t.Setenv("DEEPSEEK_API_KEY_NEW", "test-deepseek-key")
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var payload map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 			t.Errorf("decode request: %v", err)
+		}
+		messages, ok := payload["messages"].([]any)
+		if !ok || len(messages) == 0 {
+			t.Fatalf("messages payload = %#v", payload["messages"])
+		}
+		systemMessage, ok := messages[0].(map[string]any)
+		if !ok || systemMessage["role"] != "system" || systemMessage["content"] != "shared benchmark prompt" {
+			t.Errorf("system message = %#v", messages[0])
 		}
 		thinking, ok := payload["thinking"].(map[string]any)
 		if !ok || thinking["type"] != "disabled" {
@@ -247,10 +255,11 @@ func TestGenerateAnswerSendsConfiguredThinkingMode(t *testing.T) {
 			Provider:         "deepseek-official",
 			BaseURL:          server.URL,
 			Model:            "deepseek-v4-flash",
-			APIKeyEnv:        "DEEPSEEK_API_KEY",
+			APIKeyEnv:        "DEEPSEEK_API_KEY_NEW",
 			TimeoutSeconds:   2,
 			RetryMaxAttempts: 1,
 			Thinking:         "disabled",
+			SystemPrompt:     "shared benchmark prompt",
 		},
 		"question",
 		[]ChunkResult{{FileName: "doc.txt", ChunkID: "chunk-1", Content: "evidence"}},
@@ -331,6 +340,26 @@ func TestGenerationUserContentIncludesPageImageDataURL(t *testing.T) {
 	imagePart, ok := parts[2]["image_url"].(map[string]any)
 	if !ok || imagePart["url"] != "data:image/jpeg;base64,/9j/2Q==" {
 		t.Fatalf("image part = %#v", parts[2])
+	}
+}
+
+func TestBoundedGenerationChunksCapsEvidenceWithoutChangingRetrievalInput(t *testing.T) {
+	chunks := []ChunkResult{
+		{Rank: 1, FileName: "first.txt", ChunkID: "first", Content: strings.Repeat("甲", 80)},
+		{Rank: 2, FileName: "second.txt", ChunkID: "second", Content: strings.Repeat("乙", 80)},
+	}
+	selected, usedBytes, truncated := boundedGenerationChunks(chunks, 180)
+	if !truncated {
+		t.Fatal("bounded context did not report truncation")
+	}
+	if len(selected) != 1 {
+		t.Fatalf("selected chunks = %d, want 1", len(selected))
+	}
+	if usedBytes > 180 {
+		t.Fatalf("used bytes = %d, want <= 180", usedBytes)
+	}
+	if chunks[0].Content != strings.Repeat("甲", 80) || chunks[1].Content != strings.Repeat("乙", 80) {
+		t.Fatal("bounded context mutated the retrieval chunks")
 	}
 }
 

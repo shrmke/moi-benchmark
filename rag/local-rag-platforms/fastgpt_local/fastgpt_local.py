@@ -29,10 +29,20 @@ from env import inject_central_env  # noqa: E402
 RUNTIME = ROOT / ".local-services/fastgpt_local"
 COMPOSE = RUNTIME / "compose/docker-compose.pg.yml"
 SOURCE_LOCK = RUNTIME / "compose/source-lock.json"
-CONTRACTS = Path(__file__).with_name("contracts.json")
+LEGACY_CONTRACTS = Path(__file__).with_name("legacy_provider_contracts.json")
+MAAS_CONTRACTS = Path(__file__).with_name("maas_provider_contract.json")
+DEEPSEEK_CONTRACTS = Path(__file__).with_name("deepseek_provider_contract.json")
+MAAS_MODELS = Path(__file__).with_name("maas-models.example.json")
+DEEPSEEK_MODELS = Path(__file__).with_name("deepseek-models.example.json")
 EXPECTED_TAG = "v4.15.6"
 EXPECTED_COMMIT = "3db33e93b78e75b37c93f7a6e3d0fafeafbfd256"
-DEFAULT_PROVIDER = "taas"
+# The standalone helper is used by the current benchmark handoff. Legacy
+# providers remain available only through an explicit --provider selection.
+DEFAULT_PROVIDER = "maas"
+DEFAULT_MAAS_BASE_URL = "https://api.modelarts-maas.com/v1"
+MAAS_HOST = "api.modelarts-maas.com"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_HOST = "api.deepseek.com"
 # FastGPT's pinned vector-store schemas are VECTOR(1536)/HALFVEC(1536).  The
 # upstream embedding dimension is recorded separately so a successful API
 # call cannot be mistaken for a full-width 4096-dimensional index.
@@ -50,10 +60,10 @@ PROVIDER_PROFILES = {
     "maas": {
         "env_prefix": "MAAS",
         "channel_name": "Huawei Cloud MaaS",
-        "base_url": "https://api.modelarts-maas.com/v1",
-        "llm_model": "deepseek-v4-flash",
+        "base_url": DEFAULT_MAAS_BASE_URL,
+        "llm_model": "glm-5.2",
         "embedding_model": "bge-m3",
-        "reranker_model": "bge-reranker-v2-m3",
+        "embedding_dimension": 1024,
         "channel_type": 1,
     },
     "taas": {
@@ -76,6 +86,17 @@ PROVIDER_PROFILES = {
         # ChannelTypeBaiduV2 = 13 is the legacy ak|sk adapter, not Qianfan V2 API keys.
         "channel_type": 49,
     },
+    "deepseek-official": {
+        "env_prefix": "DEEPSEEK",
+        "api_key_env": "DEEPSEEK_API_KEY_NEW",
+        "channel_name": "DeepSeek Official",
+        "base_url": DEFAULT_DEEPSEEK_BASE_URL,
+        "llm_model": "deepseek-v4-flash",
+        # The embedding model is supplied by the separate MaaS channel.
+        "embedding_model": "bge-m3",
+        "embedding_dimension": 1024,
+        "channel_type": 1,
+    },
 }
 
 
@@ -90,6 +111,161 @@ def run(command: list[str]) -> subprocess.CompletedProcess[str]:
 def load_json(path: Path) -> Any:
     with path.open(encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def provider_contract(provider_name: str) -> dict[str, Any]:
+    """Load the active provider contract, keeping legacy templates non-active."""
+
+    if provider_name not in PROVIDER_PROFILES:
+        raise ContractError(f"unknown provider: {provider_name}")
+    path = {
+        "maas": MAAS_CONTRACTS,
+        "deepseek-official": DEEPSEEK_CONTRACTS,
+    }.get(provider_name, LEGACY_CONTRACTS)
+    return load_json(path)
+
+
+def maas_model_configuration() -> list[dict[str, Any]]:
+    """Load the exact text-only MaaS model metadata required by FastGPT.
+
+    FastGPT keeps model type metadata in its own ``system_models`` collection;
+    an AIProxy channel by itself is not enough for the saved-channel test or
+    for dataset/app model selectors. Keep this small configuration beside the
+    provider contract so the MaaS path cannot silently inherit a legacy model.
+    """
+
+    models = load_json(MAAS_MODELS)
+    if not isinstance(models, list) or not models:
+        raise ContractError("MaaS model configuration must be a non-empty list")
+    required = {"glm-5.2": "llm", "bge-m3": "embedding"}
+    observed: dict[str, str] = {}
+    for item in models:
+        if not isinstance(item, dict):
+            raise ContractError("MaaS model configuration contains a non-object")
+        model = str(item.get("model", "")).strip()
+        metadata = item.get("metadata")
+        if not model or not isinstance(metadata, dict):
+            raise ContractError("MaaS model configuration requires model and metadata")
+        model_type = str(metadata.get("type", "")).strip()
+        if model in observed:
+            raise ContractError(f"duplicate MaaS model configuration: {model}")
+        observed[model] = model_type
+        if model not in required:
+            raise ContractError(f"unexpected MaaS model configuration: {model}")
+        if model_type != required[model]:
+            raise ContractError(f"MaaS model {model} must be type {required[model]}")
+        if str(metadata.get("model", "")).strip() != model:
+            raise ContractError(f"MaaS model metadata.model mismatch: {model}")
+        if metadata.get("isActive") is not True:
+            raise ContractError(f"MaaS model must be active: {model}")
+    if observed != required:
+        raise ContractError("MaaS model configuration must contain exactly glm-5.2 and bge-m3")
+    return models
+
+
+def deepseek_model_configuration() -> list[dict[str, Any]]:
+    """Load the single official DeepSeek text model required by FastGPT."""
+
+    models = load_json(DEEPSEEK_MODELS)
+    if not isinstance(models, list) or len(models) != 1:
+        raise ContractError("DeepSeek model configuration must contain exactly one model")
+    item = models[0]
+    metadata = item.get("metadata") if isinstance(item, dict) else None
+    if (
+        not isinstance(item, dict)
+        or str(item.get("model", "")).strip() != "deepseek-v4-flash"
+        or not isinstance(metadata, dict)
+        or metadata.get("type") != "llm"
+        or metadata.get("isActive") is not True
+    ):
+        raise ContractError("DeepSeek model configuration must be active deepseek-v4-flash llm metadata")
+    return models
+
+
+def build_model_configuration_mongosh_script(models: list[dict[str, Any]]) -> str:
+    """Build an idempotent Mongo update without deleting unrelated model rows."""
+
+    encoded = json.dumps(models, ensure_ascii=False, separators=(",", ":"))
+    return f"""
+const models = {encoded};
+const results = [];
+for (const item of models) {{
+  const result = db.system_models.updateOne(
+    {{ model: item.model }},
+    {{ $set: {{ model: item.model, metadata: item.metadata }} }},
+    {{ upsert: true }}
+  );
+  results.push({{ model: item.model, matched: result.matchedCount, modified: result.modifiedCount, upserted: result.upsertedCount }});
+}}
+print(JSON.stringify({{ models: results }}));
+""".strip()
+
+
+def ensure_fastgpt_model_configuration(provider_name: str) -> dict[str, Any]:
+    """Materialize provider model metadata in the local FastGPT Mongo store."""
+
+    if provider_name == "maas":
+        models = maas_model_configuration()
+    elif provider_name == "deepseek-official":
+        models = deepseek_model_configuration()
+    else:
+        return {"status": "not_required", "provider": provider_name, "models": []}
+    username = os.getenv("FASTGPT_MONGO_USERNAME", "myusername").strip()
+    password = os.getenv("FASTGPT_MONGO_PASSWORD", "mypassword").strip()
+    database = os.getenv("FASTGPT_MONGO_DATABASE", "fastgpt").strip()
+    if not username or not password or not database:
+        raise ContractError("FastGPT Mongo model configuration credentials are incomplete")
+    script = build_model_configuration_mongosh_script(models)
+    result = run([
+        "docker",
+        "exec",
+        "fastgpt-mongo",
+        "mongosh",
+        "--quiet",
+        "-u",
+        username,
+        "-p",
+        password,
+        "--authenticationDatabase",
+        "admin",
+        database,
+        "--eval",
+        script,
+    ])
+    if result.returncode:
+        raise ContractError(
+            f"FastGPT {provider_name} model metadata update failed: "
+            f"{redact_error_message(result.stderr.strip())[:1200]}"
+        )
+    try:
+        update_result = json.loads(result.stdout.strip().splitlines()[-1])
+    except (json.JSONDecodeError, IndexError) as exc:
+        raise ContractError("FastGPT MaaS model metadata update returned invalid JSON") from exc
+    reload_wait = max(0.0, float(os.getenv("FASTGPT_MODEL_RELOAD_WAIT_SECONDS", "1")))
+    if reload_wait:
+        time.sleep(reload_wait)
+    return {
+        "status": "ready",
+        "provider": provider_name,
+        "database": database,
+        "models": [item["model"] for item in models],
+        "update": update_result,
+        "reload": "mongo_change_stream",
+        "reload_wait_seconds": reload_wait,
+    }
+
+
+def provider_api_key(provider_name: str, env: dict[str, str]) -> str:
+    """Load only the selected provider's API key; never fall back across providers."""
+
+    if provider_name not in PROVIDER_PROFILES:
+        raise ContractError(f"unknown provider: {provider_name}")
+    profile = PROVIDER_PROFILES[provider_name]
+    key_name = str(profile.get("api_key_env") or f"{profile['env_prefix']}_API_KEY")
+    value = str(env.get(key_name, "")).strip()
+    if not value or value.startswith("<"):
+        raise ContractError(f"{key_name} must be loaded before provider --execute")
+    return value
 
 
 def preflight() -> int:
@@ -167,10 +343,10 @@ def preflight() -> int:
             "model_egress": "external",
         },
         "maas": {
-            "base_url": os.getenv("MAAS_BASE_URL", "https://api.modelarts-maas.com/v1"),
-            "llm_model": os.getenv("MAAS_LLM_MODEL", "deepseek-v4-flash"),
+            "base_url": os.getenv("MAAS_BASE_URL", DEFAULT_MAAS_BASE_URL),
+            "llm_model": os.getenv("MAAS_LLM_MODEL", "glm-5.2"),
             "embedding_model": os.getenv("MAAS_EMBEDDING_MODEL", "bge-m3"),
-            "reranker_model": os.getenv("MAAS_RERANKER_MODEL", "bge-reranker-v2-m3"),
+            "reranker_model": os.getenv("MAAS_RERANKER_MODEL", ""),
             "api_key_loaded": env["MAAS_API_KEY"],
             "model_egress": "external",
         },
@@ -231,6 +407,42 @@ def validate_local_url(value: str) -> str:
     if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
         raise ContractError("FASTGPT_BASE_URL must target localhost; cloud endpoints are refused")
     return value.rstrip("/")
+
+
+def validate_maas_base_url(value: str) -> str:
+    """Accept only the frozen Huawei MaaS HTTPS endpoint."""
+
+    raw = str(value or "").strip()
+    try:
+        parsed = urlparse(raw)
+        port = parsed.port
+    except ValueError as exc:
+        raise ContractError("MAAS_ONLY_BASE_URL_REQUIRED") from exc
+    if (
+        parsed.scheme.casefold() != "https"
+        or (parsed.hostname or "").casefold() != MAAS_HOST
+        or port not in (None, 443)
+        or parsed.username
+        or parsed.password
+    ):
+        raise ContractError("MAAS_ONLY_BASE_URL_REQUIRED")
+    return raw.rstrip("/")
+
+
+def validate_deepseek_base_url(value: str) -> str:
+    """Accept only the frozen official DeepSeek HTTPS endpoint."""
+
+    raw = str(value or "").strip()
+    parsed = urlparse(raw)
+    if (
+        parsed.scheme.casefold() != "https"
+        or (parsed.hostname or "").casefold() != DEEPSEEK_HOST
+        or parsed.port not in (None, 443)
+        or parsed.username
+        or parsed.password
+    ):
+        raise ContractError("DEEPSEEK_OFFICIAL_BASE_URL_REQUIRED")
+    return raw.rstrip("/")
 
 
 def redact(value: Any) -> Any:
@@ -297,6 +509,8 @@ def embedding_spec(provider_name: str, env: dict[str, str]) -> dict[str, Any]:
     model = env.get(f"{prefix}_EMBEDDING_MODEL", profile["embedding_model"]).strip()
     if not model:
         raise ContractError(f"{prefix}_EMBEDDING_MODEL must not be empty")
+    if provider_name == "maas" and model != "bge-m3":
+        raise ContractError("MAAS_EMBEDDING_MODEL must be exactly bge-m3")
 
     configured = env.get(f"{prefix}_EMBEDDING_DIMENSION", "").strip()
     default_dimension = profile.get("embedding_dimension")
@@ -331,23 +545,53 @@ def embedding_spec(provider_name: str, env: dict[str, str]) -> dict[str, Any]:
 
 def build_channel_payload(provider_name: str, env: dict[str, str], *, api_key: str) -> dict[str, Any]:
     """Build a provider-specific AIProxy payload without inheriting TaaS adapter semantics."""
-    contract = load_json(CONTRACTS)["provider_channel_api"]
+    contract = provider_contract(provider_name)["provider_channel_api"]
     profile = PROVIDER_PROFILES[provider_name]
     prefix = profile["env_prefix"]
-    reranker_model = env.get(f"{prefix}_RERANKER_MODEL", profile.get("reranker_model", "")).strip()
-    embedding = embedding_spec(provider_name, env)
-    models = [
-        env.get(f"{prefix}_LLM_MODEL", profile["llm_model"]),
-        embedding["model"],
-    ]
+    reranker_model = ""
+    if provider_name != "maas":
+        reranker_model = env.get(f"{prefix}_RERANKER_MODEL", profile.get("reranker_model", "")).strip()
+    elif str(env.get(f"{prefix}_ENABLE_RERANKER", "")).strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        reranker_model = env.get(f"{prefix}_RERANKER_MODEL", profile.get("reranker_model", "")).strip()
+    llm_model = env.get(f"{prefix}_LLM_MODEL", profile["llm_model"]).strip()
+    if provider_name == "maas":
+        if llm_model != "glm-5.2":
+            raise ContractError("MAAS_LLM_MODEL must be exactly glm-5.2")
+        embedding_model = embedding_spec(provider_name, env)["model"]
+        embedding_only = str(env.get("MAAS_EMBEDDING_ONLY", "")).strip().casefold() in {
+            "1", "true", "yes", "on"
+        }
+        models = [embedding_model] if embedding_only else [llm_model, embedding_model]
+    elif provider_name == "deepseek-official":
+        if llm_model != "deepseek-v4-flash":
+            raise ContractError("DEEPSEEK_LLM_MODEL must be exactly deepseek-v4-flash")
+        models = [llm_model]
+    else:
+        models = [llm_model, embedding_spec(provider_name, env)["model"]]
     if reranker_model:
         models.append(reranker_model)
+
+    channel_name = env.get(f"{prefix}_CHANNEL_NAME", profile["channel_name"]).strip()
+    base_url = env.get(f"{prefix}_BASE_URL", profile["base_url"]).strip().rstrip("/")
+    if provider_name == "maas":
+        base_url = validate_maas_base_url(base_url)
+        if any(marker in channel_name.casefold() for marker in ("taas", "qianfan")):
+            raise ContractError("MAAS_CHANNEL_NAME must not identify a legacy provider")
+        if any(marker in base_url.casefold() for marker in ("qianfan", "matrixorigin.cn")):
+            raise ContractError("MAAS_BASE_URL must not identify a legacy provider")
+    elif provider_name == "deepseek-official":
+        base_url = validate_deepseek_base_url(base_url)
 
     payload = dict(contract["create"]["payload"])
     payload.update({
         "type": profile["channel_type"],
-        "name": env.get(f"{prefix}_CHANNEL_NAME", profile["channel_name"]),
-        "base_url": env.get(f"{prefix}_BASE_URL", profile["base_url"]).rstrip("/"),
+        "name": channel_name,
+        "base_url": base_url,
         "models": models,
         "key": api_key,
     })
@@ -366,6 +610,9 @@ def build_dataset_payload(
     profile = PROVIDER_PROFILES[provider_name]
     prefix = profile["env_prefix"]
     embedding = embedding_spec(provider_name, env)
+    llm_model = env.get(f"{prefix}_LLM_MODEL", profile["llm_model"]).strip()
+    if provider_name == "maas" and llm_model != "glm-5.2":
+        raise ContractError("MAAS_LLM_MODEL must be exactly glm-5.2")
     return {
         "parentId": None,
         "type": "dataset",
@@ -373,8 +620,42 @@ def build_dataset_payload(
         "intro": "MOI local RAG FastGPT smoke",
         "avatar": "",
         "vectorModel": embedding["model"],
-        "agentModel": env.get(f"{prefix}_LLM_MODEL", profile["llm_model"]),
+        "agentModel": llm_model,
     }
+
+
+def build_native_chat_payload(
+    *,
+    provider_name: str,
+    app_id: str,
+    question: str,
+    env: dict[str, str],
+    chat_id: str | None = None,
+) -> dict[str, Any]:
+    """Build a native app request and disable thinking for exact MaaS GLM calls."""
+
+    if provider_name not in PROVIDER_PROFILES:
+        raise ContractError(f"unknown provider: {provider_name}")
+    profile = PROVIDER_PROFILES[provider_name]
+    prefix = profile["env_prefix"]
+    model = str(env.get(f"{prefix}_LLM_MODEL", profile["llm_model"])).strip()
+    base_url = str(env.get(f"{prefix}_BASE_URL", profile["base_url"])).strip().rstrip("/")
+    expected_base_url = str(env.get("MAAS_BASE_URL", DEFAULT_MAAS_BASE_URL)).strip().rstrip("/")
+    if provider_name == "maas" and model != "glm-5.2":
+        raise ContractError("MAAS_LLM_MODEL must be exactly glm-5.2")
+    if provider_name == "maas":
+        base_url = validate_maas_base_url(base_url)
+        expected_base_url = validate_maas_base_url(expected_base_url)
+    payload: dict[str, Any] = {
+        "appId": app_id,
+        "chatId": chat_id or str(uuid.uuid4()),
+        "stream": False,
+        "detail": True,
+        "messages": [{"role": "user", "content": question}],
+    }
+    if provider_name == "maas" and model == "glm-5.2" and base_url == expected_base_url:
+        payload["thinking"] = {"type": "disabled"}
+    return payload
 
 
 def _app_input(key: str, value_type: str, value: Any, render_type: str = "hidden") -> dict[str, Any]:
@@ -396,7 +677,17 @@ def build_isolated_app_payload(
     embedding_model: str | None = None,
 ) -> dict[str, Any]:
     """Create a minimal v4.15.x simple RAG app bound to exactly one new dataset."""
-    profile = PROVIDER_PROFILES[provider_name]
+    if provider_name == "deepseek-official":
+        # The benchmark uses a split upstream contract: DeepSeek serves only
+        # the chat model while the dataset keeps MaaS bge-m3. Both explicit
+        # model IDs are supplied by the runner below, so no cross-provider
+        # credential or embedding fallback is inferred here.
+        profile = {
+            "env_prefix": "DEEPSEEK",
+            "llm_model": "deepseek-v4-flash",
+        }
+    else:
+        profile = PROVIDER_PROFILES[provider_name]
     prefix = profile["env_prefix"]
     llm_model = (llm_model or os.getenv(f"{prefix}_LLM_MODEL", profile["llm_model"])).strip()
     embedding_model = (embedding_model or embedding_spec(provider_name, dict(os.environ))["model"]).strip()
@@ -489,10 +780,31 @@ def build_isolated_app_payload(
 
 
 def provider(args: argparse.Namespace) -> int:
-    contract = load_json(CONTRACTS)["provider_channel_api"]
+    contract = provider_contract(args.provider)
     profile = PROVIDER_PROFILES[args.provider]
     if not args.execute:
-        print(json.dumps({"selected_provider": args.provider, "profile": profile, "contract": contract}, ensure_ascii=False, indent=2))
+        prefix = profile["env_prefix"]
+        key_env = str(profile.get("api_key_env") or f"{prefix}_API_KEY")
+        configured_key = os.getenv(key_env, "").strip()
+        dry_key = configured_key if configured_key and not configured_key.startswith("<") else f"<{key_env}>"
+        effective_channel = build_channel_payload(
+            args.provider,
+            dict(os.environ),
+            api_key=dry_key,
+        )
+        print(json.dumps({
+            "selected_provider": args.provider,
+            "contract_scope": (
+                "active_maas"
+                if args.provider == "maas"
+                else "official_deepseek"
+                if args.provider == "deepseek-official"
+                else "legacy_provider"
+            ),
+            "profile": profile,
+            "effective_channel": redact(effective_channel),
+            "provider_contract": contract,
+        }, ensure_ascii=False, indent=2))
         print("Dry run only. Pass --execute after MaxKB is stopped and FastGPT is started.", file=sys.stderr)
         return 0
 
@@ -506,10 +818,9 @@ def provider(args: argparse.Namespace) -> int:
         if required not in names:
             raise ContractError(f"required container is not running: {required}")
 
-    prefix = profile["env_prefix"]
-    provider_key = os.getenv(f"{prefix}_API_KEY", "").strip()
-    if not provider_key or provider_key.startswith("<"):
-        raise ContractError(f"{prefix}_API_KEY must be loaded before provider --execute")
+    provider_key = provider_api_key(args.provider, dict(os.environ))
+
+    model_configuration = ensure_fastgpt_model_configuration(args.provider)
 
     inspect = run([
         "docker", "inspect", "fastgpt-aiproxy", "--format", "{{json .Config.Env}}"
@@ -525,9 +836,10 @@ def provider(args: argparse.Namespace) -> int:
     request_input = json.dumps({
         "adminKey": admin_key,
         "channel": create,
-        # Repair the previously-created generic OpenAI channel and refresh its key.
-        # Other providers retain the conservative no-overwrite behavior.
-        "repairExisting": args.provider == "qianfan",
+        # Provider-specific channels may be repaired
+        # only after the Node verifier finds exactly one channel with the
+        # requested name; duplicate or mismatched saved identities fail closed.
+        "repairExisting": args.provider in {"qianfan", "maas", "deepseek-official"},
     })
     node_program = r"""
 const fs = require('fs');
@@ -554,6 +866,10 @@ async function request(path, options = {}) {
   let channels = await request('/api/channels/all');
   let matches = channels.filter((item) => item.name === input.channel.name);
   if (matches.length > 1) throw new Error(`duplicate channels named ${input.channel.name}`);
+  if (matches.length === 1 &&
+      (String(matches[0].name) !== String(input.channel.name) || !matches[0].id)) {
+    throw new Error('existing channel failed exact name/id identity check');
+  }
   let created = false;
   if (matches.length === 0) {
     await request('/api/channel/', { method: 'POST', body: JSON.stringify(input.channel) });
@@ -569,6 +885,9 @@ async function request(path, options = {}) {
     matches = channels.filter((item) => item.name === input.channel.name);
   }
   if (matches.length !== 1) throw new Error('created channel was not returned by /api/channels/all');
+  if (String(matches[0].name) !== String(input.channel.name) || !matches[0].id) {
+    throw new Error('saved channel failed exact name/id identity check');
+  }
   const channel = matches[0];
   const expectedModels = [...input.channel.models].sort().join(',');
   const actualModels = [...(channel.models || [])].sort().join(',');
@@ -595,25 +914,47 @@ async function request(path, options = {}) {
         check=False,
     )
     if result.returncode:
-        raise ContractError(f"provider create/list/test failed: {result.stderr.strip()[:1500]}")
+        error_message = result.stderr.strip()[:1500]
+        if admin_key:
+            error_message = error_message.replace(admin_key, "<redacted>")
+        raise ContractError(
+            "provider create/list/test failed: "
+            f"{redact_error_message(error_message)}"
+        )
     try:
         output = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise ContractError("provider verifier returned invalid JSON") from exc
-    allow_empty_saved_test = args.provider == "qianfan"
+    # AIProxy v0.6.5 returns an empty aggregate for the generic OpenAI/MaaS
+    # channel even when the channel is saved and the model metadata is active.
+    # The actual FastGPT dataset/native-QA smoke below is authoritative for
+    # MaaS; keep explicit per-model failures fatal.
+    # AIProxy v0.6.5 does not yet classify the official DeepSeek v4 model
+    # family in its optional channel tester, so it returns an empty aggregate
+    # even though the OpenAI-compatible channel is saved and the upstream
+    # endpoint accepts the model.  The FastGPT native smoke is authoritative
+    # for this route, just as it is for the MaaS channel.
+    allow_empty_saved_test = args.provider in {"qianfan", "maas", "deepseek-official"}
     validate_provider_test_results(output, allow_empty=allow_empty_saved_test)
-    output["saved_test_status"] = (
-        "empty_non_authoritative_use_fastgpt_type_aware_tests"
-        if allow_empty_saved_test and not output.get("test")
-        else "passed"
-    )
+    if allow_empty_saved_test and not output.get("test"):
+        output["saved_test_status"] = (
+            "empty_non_authoritative_use_fastgpt_native_smoke"
+            if args.provider in {"maas", "deepseek-official"}
+            else "empty_non_authoritative_use_fastgpt_type_aware_tests"
+        )
+    else:
+        output["saved_test_status"] = "passed"
+    output["model_configuration"] = model_configuration
     print(json.dumps(redact(output), ensure_ascii=False, indent=2))
     return 0
 
 
 def smoke(args: argparse.Namespace) -> int:
     if not args.execute:
-        print(json.dumps(load_json(CONTRACTS), ensure_ascii=False, indent=2))
+        provider_name = os.getenv("FASTGPT_MODEL_PROVIDER", DEFAULT_PROVIDER).strip().lower()
+        if provider_name not in PROVIDER_PROFILES:
+            raise ContractError(f"FASTGPT_MODEL_PROVIDER must be one of {sorted(PROVIDER_PROFILES)}")
+        print(json.dumps(provider_contract(provider_name), ensure_ascii=False, indent=2))
         print("Dry run only. Pass --execute after FastGPT is started and local credentials are loaded.", file=sys.stderr)
         return 0
 
@@ -788,13 +1129,12 @@ def smoke(args: argparse.Namespace) -> int:
 
         stage = "native"
         question = os.getenv("FASTGPT_SMOKE_QUESTION", "What facts are stated in the local smoke documents?")
-        native_request = {
-            "appId": app_id,
-            "chatId": str(uuid.uuid4()),
-            "stream": False,
-            "detail": True,
-            "messages": [{"role": "user", "content": question}],
-        }
+        native_request = build_native_chat_payload(
+            provider_name=provider_name,
+            app_id=app_id,
+            question=question,
+            env=dict(os.environ),
+        )
         native = api_request(
             base_url,
             "/api/v1/chat/completions",

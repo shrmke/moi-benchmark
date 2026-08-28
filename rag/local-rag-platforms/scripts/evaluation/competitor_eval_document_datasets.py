@@ -43,18 +43,17 @@ EXCLUDED_BENCHMARKS = ["OmniDocBench", "Lenovo"]
 
 FIXED_PROVIDER: dict[str, Any] = {
     "model_egress": "external",
-    "qianfan": {
-        "provider": "qianfan",
-        "judge_model": "deepseek-v4-flash",
-        "generator_model": "qwen3.5-35b-a3b",
-    },
     "maas": {
         "provider": "maas",
+        "judge_model": "glm-5.2",
+        "generator_model": "glm-5.2",
+        "multimodal_generator_model": "Qwen2.5-VL-72B-32K",
         "embedding_model": "bge-m3",
         "dimension": 1024,
     },
-    "judge_model": "deepseek-v4-flash",
-    "generator_model": "qwen3.5-35b-a3b",
+    "judge_model": "glm-5.2",
+    "generator_model": "glm-5.2",
+    "multimodal_generator_model": "Qwen2.5-VL-72B-32K",
     "embedding_model": "bge-m3",
     "embedding_dimension": 1024,
 }
@@ -234,28 +233,33 @@ def _freeze_provider(provider_selection: Mapping[str, Any] | None) -> dict[str, 
                 f"provider selection is frozen: {name} must be {expected!r}, got {actual!r}"
             )
 
-    qianfan = provider_selection.get("qianfan")
-    if isinstance(qianfan, Mapping):
-        check("qianfan.provider", qianfan.get("provider"), "qianfan")
-        check("qianfan.judge_model", qianfan.get("judge_model"), FIXED_PROVIDER["judge_model"])
-        check("qianfan.generator_model", qianfan.get("generator_model"), FIXED_PROVIDER["generator_model"])
+    legacy_qianfan = provider_selection.get("qianfan")
+    if legacy_qianfan is not None:
+        raise DatasetBuildError("provider selection is frozen: qianfan is not admitted; use maas")
     maas = provider_selection.get("maas")
     if isinstance(maas, Mapping):
         check("maas.provider", maas.get("provider"), "maas")
+        check("maas.judge_model", maas.get("judge_model"), FIXED_PROVIDER["judge_model"])
+        check("maas.generator_model", maas.get("generator_model"), FIXED_PROVIDER["generator_model"])
+        check(
+            "maas.multimodal_generator_model",
+            maas.get("multimodal_generator_model"),
+            FIXED_PROVIDER["multimodal_generator_model"],
+        )
         check("maas.embedding_model", maas.get("embedding_model"), FIXED_PROVIDER["embedding_model"])
         check("maas.dimension", maas.get("dimension"), FIXED_PROVIDER["embedding_dimension"])
     # Compatibility with competitor_eval_ready.py's public provider shape.
     text = provider_selection.get("text")
     if isinstance(text, Mapping):
-        check("text.provider", text.get("provider"), "qianfan")
+        check("text.provider", text.get("provider"), "maas")
         check("text.model", text.get("model"), FIXED_PROVIDER["judge_model"])
     multimodal = provider_selection.get("multimodal")
     if isinstance(multimodal, Mapping):
-        check("multimodal.provider", multimodal.get("provider"), "qianfan")
-        check("multimodal.model", multimodal.get("model"), FIXED_PROVIDER["generator_model"])
+        check("multimodal.provider", multimodal.get("provider"), "maas")
+        check("multimodal.model", multimodal.get("model"), FIXED_PROVIDER["multimodal_generator_model"])
     embedding = provider_selection.get("embedding")
     if isinstance(embedding, Mapping):
-        check("embedding.provider", embedding.get("provider"), "huawei-maas")
+        check("embedding.provider", embedding.get("provider"), "maas")
         check("embedding.model", embedding.get("model"), FIXED_PROVIDER["embedding_model"])
         check("embedding.dimension", embedding.get("dimension"), FIXED_PROVIDER["embedding_dimension"])
 
@@ -273,7 +277,7 @@ def _freeze_provider(provider_selection: Mapping[str, Any] | None) -> dict[str, 
     }
     for key, expected in aliases.items():
         check(key, provider_selection.get(key), expected)
-    check("provider", provider_selection.get("provider"), "qianfan")
+    check("provider", provider_selection.get("provider"), "maas")
     check("model_egress", provider_selection.get("model_egress"), "external")
     return json.loads(json.dumps(FIXED_PROVIDER))
 
@@ -283,18 +287,18 @@ def _compat_provider_selection() -> dict[str, Any]:
 
     return {
         "text": {
-            "provider": "qianfan",
-            "display_name": "Qianfan",
-            "model": "deepseek-v4-flash",
+            "provider": "maas",
+            "display_name": "MaaS",
+            "model": "glm-5.2",
         },
         "multimodal": {
-            "provider": "qianfan",
-            "display_name": "Qianfan",
-            "model": "qwen3.5-35b-a3b",
+            "provider": "maas",
+            "display_name": "MaaS",
+            "model": "Qwen2.5-VL-72B-32K",
         },
         "embedding": {
-            "provider": "huawei-maas",
-            "display_name": "Huawei MaaS",
+            "provider": "maas",
+            "display_name": "MaaS",
             "model": "bge-m3",
             "dimension": 1024,
         },

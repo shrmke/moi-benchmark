@@ -3,8 +3,8 @@ label:
   en_US: Huawei Cloud MaaS
   zh_Hans: 华为云 MaaS
 description:
-  en_US: Huawei Cloud MaaS chat, embedding, and rerank models.
-  zh_Hans: 华为云 MaaS 对话、嵌入与重排模型。
+  en_US: Text-only Huawei Cloud MaaS GLM chat and BGE-M3 embeddings.
+  zh_Hans: 仅文本的华为云 MaaS GLM 对话与 BGE-M3 嵌入。
 icon_small:
   en_US: icon.svg
   zh_Hans: icon.svg
@@ -22,7 +22,6 @@ help:
 supported_model_types:
   - llm
   - text-embedding
-  - rerank
 configurate_methods:
   - predefined-model
   - customizable-model
@@ -53,8 +52,8 @@ model_credential_schema:
       en_US: Model Name
       zh_Hans: 模型名称
     placeholder:
-      en_US: Enter the Huawei Cloud MaaS model parameter
-      zh_Hans: 输入华为云 MaaS model 参数
+      en_US: Enter the Huawei Cloud MaaS model name
+      zh_Hans: 输入华为云 MaaS 模型名称
   credential_form_schemas:
     - variable: api_key
       label:
@@ -76,39 +75,18 @@ model_credential_schema:
       type: text-input
       required: true
       default: "8192"
-    - variable: vision_support
-      label:
-        en_US: Vision support
-        zh_Hans: 视觉支持
-      type: select
-      required: true
-      default: no_support
-      options:
-        - label:
-            en_US: Not supported
-            zh_Hans: 不支持
-          value: no_support
-        - label:
-            en_US: Supported
-            zh_Hans: 支持
-          value: support
 models:
   llm:
     predefined:
-      - models/huawei_llm/*.yaml
-    position: models/huawei_llm/_position.yaml
+      - models/llm/*.yaml
+    position: models/llm/_position.yaml
   text_embedding:
     predefined:
-      - models/huawei_text_embedding/*.yaml
-    position: models/huawei_text_embedding/_position.yaml
-  rerank:
-    predefined:
-      - models/huawei_rerank/*.yaml
-    position: models/huawei_rerank/_position.yaml
+      - models/text_embedding/*.yaml
+    position: models/text_embedding/_position.yaml
 extra:
   python:
     provider_source: provider/huawei_maas.py
     model_sources:
       - models/llm/llm.py
       - models/text_embedding/text_embedding.py
-      - models/rerank/rerank.py
