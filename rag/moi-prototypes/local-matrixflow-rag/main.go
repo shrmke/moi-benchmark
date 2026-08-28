@@ -32,12 +32,13 @@ import (
 )
 
 const (
-	schemaVersion       = "matrixflow-product-rag-local-v2"
-	taasAPIBaseURL      = "https://token.moi.matrixorigin.cn/v1"
-	taasAPIKeyEnvName   = "TAAS_API_KEY"
-	maasAPIBaseURL      = "https://api.modelarts-maas.com/v1"
-	maasAPIKeyEnvName   = "MAAS_API_KEY"
-	maxAPIResponseBytes = 64 << 20
+	schemaVersion                 = "matrixflow-product-rag-local-v2"
+	taasAPIBaseURL                = "https://token.moi.matrixorigin.cn/v1"
+	taasAPIKeyEnvName             = "TAAS_API_KEY"
+	maasAPIBaseURL                = "https://api.modelarts-maas.com/v1"
+	maasAPIKeyEnvName             = "MAAS_API_KEY"
+	maxAPIResponseBytes           = 64 << 20
+	defaultGenerationContextBytes = 100_000
 )
 
 var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -90,6 +91,8 @@ type GenerationConfig struct {
 	RetryBackoffSeconds float64                   `json:"retry_backoff_seconds,omitempty"`
 	Thinking            string                    `json:"thinking,omitempty"`
 	IncludePageImages   *bool                     `json:"include_page_images,omitempty"`
+	MaxContextBytes     int                       `json:"max_context_bytes,omitempty"`
+	SystemPrompt        string                    `json:"system_prompt,omitempty"`
 	Fallback            *GenerationFallbackConfig `json:"fallback,omitempty"`
 	// MMDocIR can route text-only and visual questions to different models
 	// while keeping the shared embedding/retrieval contract unchanged.
@@ -199,22 +202,25 @@ type CaseMetrics struct {
 }
 
 type RunResult struct {
-	Case               QuestionCase       `json:"case"`
-	Repeat             int                `json:"repeat"`
-	StartedAt          string             `json:"started_at"`
-	EndedAt            string             `json:"ended_at"`
-	Status             string             `json:"status"`
-	RetrievalLatencyMS float64            `json:"retrieval_latency_ms"`
-	StageLatencyMS     map[string]float64 `json:"stage_latency_ms"`
-	GenerationLatency  *float64           `json:"generation_latency_ms,omitempty"`
-	GenerationProvider string             `json:"generation_provider,omitempty"`
-	GenerationModel    string             `json:"generation_model,omitempty"`
-	Routes             []string           `json:"routes"`
-	EmbeddingModel     string             `json:"embedding_model"`
-	Chunks             []ChunkResult      `json:"chunks"`
-	Answer             string             `json:"answer,omitempty"`
-	Metrics            CaseMetrics        `json:"metrics"`
-	Error              string             `json:"error,omitempty"`
+	Case                       QuestionCase       `json:"case"`
+	Repeat                     int                `json:"repeat"`
+	StartedAt                  string             `json:"started_at"`
+	EndedAt                    string             `json:"ended_at"`
+	Status                     string             `json:"status"`
+	RetrievalLatencyMS         float64            `json:"retrieval_latency_ms"`
+	StageLatencyMS             map[string]float64 `json:"stage_latency_ms"`
+	GenerationLatency          *float64           `json:"generation_latency_ms,omitempty"`
+	GenerationProvider         string             `json:"generation_provider,omitempty"`
+	GenerationModel            string             `json:"generation_model,omitempty"`
+	GenerationContextBytes     int                `json:"generation_context_bytes,omitempty"`
+	GenerationContextChunks    int                `json:"generation_context_chunks,omitempty"`
+	GenerationContextTruncated bool               `json:"generation_context_truncated,omitempty"`
+	Routes                     []string           `json:"routes"`
+	EmbeddingModel             string             `json:"embedding_model"`
+	Chunks                     []ChunkResult      `json:"chunks"`
+	Answer                     string             `json:"answer,omitempty"`
+	Metrics                    CaseMetrics        `json:"metrics"`
+	Error                      string             `json:"error,omitempty"`
 }
 
 type Summary struct {
@@ -779,7 +785,7 @@ func newEmbedder(cfg EndpointConfig) (knowledge.EmbeddingService, error) {
 
 func isDirectProvider(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "taas", "maas":
+	case "taas", "maas", "deepseek", "deepseek-official", "dsv4f":
 		return true
 	default:
 		return false
@@ -1340,6 +1346,10 @@ func runDataset(ctx context.Context, cfg Config, datasetPath, runDir string, rep
 				Keywards: keywords,
 				FileIDs:  effectiveRAGFileIDs(cfg, item),
 				MaxHits:  maxHits,
+				// Keep the benchmark's expansion work bounded by the requested
+				// retrieval depth. Native expansion otherwise materializes every
+				// matching row in a large parent range.
+				MaxRows: maxHits,
 			})
 			result := RunResult{
 				Case:               item,
@@ -1383,8 +1393,12 @@ func runDataset(ctx context.Context, cfg Config, datasetPath, runDir string, rep
 			}
 			result.Metrics = scoreCase(item, result.Chunks)
 			if cfg.Generation.Enabled {
+				generationChunks, contextBytes, contextTruncated := boundedGenerationChunks(result.Chunks, cfg.Generation.MaxContextBytes)
+				result.GenerationContextBytes = contextBytes
+				result.GenerationContextChunks = len(generationChunks)
+				result.GenerationContextTruncated = contextTruncated
 				generationStarted := time.Now()
-				answer, generationProvider, generationModel, generationErr := generateAnswer(attemptCtx, cfg.Generation, item.Question, result.Chunks)
+				answer, generationProvider, generationModel, generationErr := generateAnswer(attemptCtx, cfg.Generation, item.Question, generationChunks)
 				latency := float64(time.Since(generationStarted).Microseconds()) / 1000
 				result.GenerationLatency = &latency
 				if generationErr != nil {
@@ -1685,6 +1699,7 @@ func generateAnswer(ctx context.Context, cfg GenerationConfig, question string, 
 			TimeoutSeconds:      cfg.Fallback.TimeoutSeconds,
 			RetryMaxAttempts:    cfg.Fallback.RetryMaxAttempts,
 			RetryBackoffSeconds: cfg.Fallback.RetryBackoffSeconds,
+			MaxContextBytes:     cfg.MaxContextBytes,
 		}
 		fmt.Printf("generation_failover from=%s model=%s to=%s model=%s reason=%s\n", cfg.Provider, cfg.Model, fallback.Provider, fallback.Model, truncateErrorBody(err.Error()))
 		fallbackAnswer, fallbackErr := generateAnswerOnce(ctx, fallback, question, chunks)
@@ -1696,23 +1711,96 @@ func generateAnswer(ctx context.Context, cfg GenerationConfig, question string, 
 	return "", "", "", err
 }
 
+func generationContextPart(chunk ChunkResult) string {
+	return fmt.Sprintf("[source=%s page=%d source_uri=%s chunk=%s]\n%s", chunk.FileName, chunk.PageNumber, chunk.SourceURI, chunk.ChunkID, chunk.Content)
+}
+
+func truncateUTF8(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len([]byte(value)) <= maxBytes {
+		return value
+	}
+	var out strings.Builder
+	out.Grow(maxBytes)
+	for _, runeValue := range value {
+		encoded := string(runeValue)
+		if out.Len()+len([]byte(encoded)) > maxBytes {
+			break
+		}
+		out.WriteString(encoded)
+	}
+	return out.String()
+}
+
+// boundedGenerationChunks keeps the full retrieved result available for
+// retrieval scoring while projecting only a bounded evidence window to the
+// text-only generator. MaaS GLM-5.2 rejects oversized prompts before it can
+// return an answer, and native parent expansion can otherwise make a single
+// result contain thousands of chunks.
+func boundedGenerationChunks(chunks []ChunkResult, maxBytes int) ([]ChunkResult, int, bool) {
+	if maxBytes <= 0 {
+		maxBytes = defaultGenerationContextBytes
+	}
+	selected := make([]ChunkResult, 0, len(chunks))
+	usedBytes := 0
+	truncated := false
+	for _, chunk := range chunks {
+		part := generationContextPart(chunk)
+		separatorBytes := 0
+		if len(selected) > 0 {
+			separatorBytes = 2 // strings.Join(contextParts, "\n\n")
+		}
+		partBytes := len([]byte(part))
+		if usedBytes+separatorBytes+partBytes <= maxBytes {
+			selected = append(selected, chunk)
+			usedBytes += separatorBytes + partBytes
+			continue
+		}
+		truncated = true
+		if len(selected) == 0 {
+			// Preserve at least the highest-ranked chunk when it is unusually
+			// large, but never split a UTF-8 sequence.
+			prefixBytes := len([]byte(generationContextPart(ChunkResult{
+				FileName: chunk.FileName, PageNumber: chunk.PageNumber,
+				SourceURI: chunk.SourceURI, ChunkID: chunk.ChunkID,
+			})))
+			clipped := chunk
+			clipped.Content = truncateUTF8(chunk.Content, maxBytes-prefixBytes)
+			clippedPart := generationContextPart(clipped)
+			if len([]byte(clippedPart)) <= maxBytes {
+				selected = append(selected, clipped)
+				usedBytes = len([]byte(clippedPart))
+			}
+		}
+		break
+	}
+	return selected, usedBytes, truncated
+}
+
 func generateAnswerOnce(ctx context.Context, cfg GenerationConfig, question string, chunks []ChunkResult) (string, error) {
 	if cfg.BaseURL == "" || cfg.Model == "" {
 		return "", errors.New("generation enabled but base_url or model is empty")
 	}
+	boundedChunks, _, _ := boundedGenerationChunks(chunks, cfg.MaxContextBytes)
 	var contextParts []string
-	for _, chunk := range chunks {
-		contextParts = append(contextParts, fmt.Sprintf("[source=%s page=%d source_uri=%s chunk=%s]\n%s", chunk.FileName, chunk.PageNumber, chunk.SourceURI, chunk.ChunkID, chunk.Content))
+	for _, chunk := range boundedChunks {
+		contextParts = append(contextParts, generationContextPart(chunk))
 	}
 	includePageImages := cfg.IncludePageImages == nil || *cfg.IncludePageImages
-	userContent, err := generationUserContent(question, strings.Join(contextParts, "\n\n"), chunks, includePageImages)
+	userContent, err := generationUserContent(question, strings.Join(contextParts, "\n\n"), boundedChunks, includePageImages)
 	if err != nil {
 		return "", err
+	}
+	systemPrompt := strings.TrimSpace(cfg.SystemPrompt)
+	if systemPrompt == "" {
+		systemPrompt = "Answer only from the supplied evidence. If the evidence is insufficient, say so. Cite the source filename and PDF page for every material claim; when source_uri includes provenance such as SHA-256, retain it in the citation, and name the visible section when possible."
 	}
 	payload := map[string]any{
 		"model": cfg.Model,
 		"messages": []map[string]any{
-			{"role": "system", "content": "Answer only from the supplied evidence. If the evidence is insufficient, say so. Cite the source filename and PDF page for every material claim; when source_uri includes provenance such as SHA-256, retain it in the citation, and name the visible section when possible."},
+			{"role": "system", "content": systemPrompt},
 			{"role": "user", "content": userContent},
 		},
 		"temperature": 0,

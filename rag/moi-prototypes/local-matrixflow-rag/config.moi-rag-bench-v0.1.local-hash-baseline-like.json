@@ -1,0 +1,27 @@
+{
+  "matrixone": {
+    "dsn": "root:111@tcp(127.0.0.1:6001)/",
+    "database": "moi_rag_bench_v01_text_only_hash_20260821",
+    "vector_table": "embedding_results"
+  },
+  "workspace_id": "moi-rag-bench-v0.1-text-only-hash-baseline-like-fallback",
+  "matrixflow_root": "../../../../matrixflow",
+  "chunk_size": 512,
+  "chunk_overlap": 50,
+  "section_size": 5,
+  "embedding_batch_size": 256,
+  "insert_batch_size": 50,
+  "embedding_concurrency": 1,
+  "like_fulltext_fallback": true,
+  "embedding": {
+    "mode": "hash",
+    "model": "deterministic-hash-local-baseline-v1",
+    "dimension": 256,
+    "timeout_seconds": 60,
+    "retry_max_attempts": 1,
+    "retry_backoff_seconds": 0
+  },
+  "generation": {
+    "enabled": false
+  }
+}

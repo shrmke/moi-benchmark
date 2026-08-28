@@ -26,7 +26,7 @@
     "provider": "deepseek-official",
     "base_url": "https://api.deepseek.com",
     "model": "deepseek-v4-flash",
-    "api_key_env": "DEEPSEEK_API_KEY",
+    "api_key_env": "DEEPSEEK_API_KEY_NEW",
     "timeout_seconds": 300,
     "retry_max_attempts": 5,
     "retry_backoff_seconds": 10,

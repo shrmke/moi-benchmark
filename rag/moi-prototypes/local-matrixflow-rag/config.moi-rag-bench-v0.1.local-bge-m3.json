@@ -1,0 +1,28 @@
+{
+  "matrixone": {
+    "dsn": "root:111@tcp(127.0.0.1:6001)/",
+    "database": "moi_rag_bench_v01_text_only_20260821",
+    "vector_table": "embedding_results"
+  },
+  "workspace_id": "moi-rag-bench-v01-text-only",
+  "matrixflow_root": "../../../../matrixflow",
+  "chunk_size": 512,
+  "chunk_overlap": 50,
+  "section_size": 5,
+  "embedding_batch_size": 64,
+  "insert_batch_size": 50,
+  "embedding_concurrency": 1,
+  "embedding": {
+    "mode": "openai",
+    "base_url": "http://127.0.0.1:8081/v1",
+    "model": "BAAI/bge-m3",
+    "api_key_env": "",
+    "dimension": 1024,
+    "timeout_seconds": 600,
+    "retry_max_attempts": 1,
+    "retry_backoff_seconds": 0
+  },
+  "generation": {
+    "enabled": false
+  }
+}
