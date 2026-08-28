@@ -44,15 +44,17 @@ def test_versions_freeze_matrixone_and_competitor_deployment_images() -> None:
     assert maxkb["compose"]["type"] == "docker-run"
     for service in (dify, fastgpt, maxkb, matrixone):
         active = service["active_benchmark"]
-        assert active["provider"] == "maas"
+        assert active["provider_policy"] == "deepseek_text_maas_embedding"
+        assert active["text_llm_provider"] == "deepseek-official"
+        assert active["embedding_provider"] == "maas"
         assert active["embedding_model"] == "bge-m3"
         assert active["embedding_dimension"] == 1024
-        assert active["text_llm"] == "glm-5.2"
+        assert active["text_llm"] == "deepseek-v4-flash"
         assert active["thinking"] == {"type": "disabled"}
         assert active["mllm"] == "NOT_APPLICABLE"
 
 
-def test_active_text_only_templates_are_maas_only() -> None:
+def test_active_text_only_templates_use_split_provider_contract() -> None:
     dify = (ROOT / "local-rag-platforms/dify_local/runtime.env.example").read_text(encoding="utf-8")
     fastgpt = (ROOT / "local-rag-platforms/fastgpt_local/.env.example").read_text(encoding="utf-8")
     maxkb = (ROOT / "local-rag-platforms/maxkb_local/runtime.env.example").read_text(encoding="utf-8")
@@ -62,10 +64,11 @@ def test_active_text_only_templates_are_maas_only() -> None:
         assert "qwen" not in text.casefold()
         assert "=taas" not in text.casefold()
         assert "=qianfan" not in text.casefold()
-    assert "MAAS_LLM_MODEL=glm-5.2" in dify
-    assert "DIFY_MAAS_LLM_PROVIDER=matrixorigin/matrixorigin_huawei_maas/huawei_maas" in dify
-    assert "FASTGPT_MODEL_PROVIDER=maas" in fastgpt
+    assert "DEEPSEEK_LLM_MODEL=deepseek-v4-flash" in dify
+    assert "DIFY_DEEPSEEK_LLM_PROVIDER=<active-deepseek-provider-id>" in dify
+    assert "FASTGPT_LLM_PROVIDER=deepseek-official" in fastgpt
     assert "MAXKB_EMBEDDING_PROVIDER=maas" in maxkb
+    assert "MAXKB_LLM_MODEL_NAME=deepseek-v4-flash" in maxkb
     assert "MAAS_VL_MODEL=NOT_APPLICABLE" in provider
 
 

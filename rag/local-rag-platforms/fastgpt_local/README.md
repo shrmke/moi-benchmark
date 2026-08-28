@@ -19,25 +19,25 @@ deployment file currently references FastGPT and code-sandbox images at
 `v4.15.4`; this is recorded as a version divergence in the runtime manifest.
 Configure at least one Language Model and one Index Model through the local UI.
 The historical Qianfan pair is documented below as a legacy condition. The
-current MOI text-only serial benchmark uses only Huawei MaaS `glm-5.2` plus
-`bge-m3` (effective upstream dimension 1024); the product and its data services
-remain local. TaaS, Qianfan, and MaaS remain independent provider options and
-must not share an embedding index.
+current MOI text-only serial benchmark uses DeepSeek official
+`deepseek-v4-flash` for text generation and Huawei MaaS `bge-m3` for embedding
+(effective upstream dimension 1024); the product and its data services remain
+local. Historical provider conditions must not share an embedding index.
 
-### Current MOI MaaS contract
+### Current MOI split-provider contract
 
-For the current benchmark, the helper materializes exactly two FastGPT
-`system_models` rows before dataset creation:
+For the current benchmark, FastGPT has two independent OpenAI-compatible
+channels and exactly two active `system_models` rows before dataset creation:
 
-- `glm-5.2`: active `llm`, OpenAI-compatible provider, `thinking={"type":"disabled"}`;
+- `deepseek-v4-flash`: active `llm` on the DeepSeek official channel,
+  `thinking={"type":"disabled"}`;
 - `bge-m3`: active `embedding`, OpenAI-compatible provider, weight `100`.
 
-`fastgpt_local.py provider --provider maas --execute` performs this idempotent
-metadata update, then verifies the exact AIProxy channel. The generic saved
-channel aggregate may return an empty result on AIProxy `v0.6.5`; for MaaS this
-is recorded as non-authoritative, while the direct MaaS probe and isolated
-FastGPT dataset/native-QA smoke are authoritative. The model update only
-touches these two exact model names and never deletes unrelated rows.
+Run the provider helper once for DeepSeek and once with MaaS embedding-only.
+The generic saved-channel aggregate may return an empty result on AIProxy
+`v0.6.5`; direct provider probes and the isolated FastGPT dataset/native-QA
+smoke remain authoritative. The model update only touches the exact model
+names and never deletes unrelated rows.
 
 ### Qianfan embedding dimension contract
 
@@ -200,23 +200,22 @@ from the running container without printing it, creates the channel only when
 its name is absent, re-lists it, validates type/base URL/models, and tests all
 saved models. It refuses to overwrite a mismatched or duplicate channel.
 
-For the Huawei MaaS condition, use the provider-specific contract and keep the
-serial competitor window closed until the owner is ready:
+For the active split contract, create the DeepSeek text channel and the MaaS
+embedding-only channel while the serial competitor window is closed:
 
 ```bash
-python3 local-rag-platforms/fastgpt_local/fastgpt_local.py provider --provider maas
-python3 local-rag-platforms/fastgpt_local/fastgpt_local.py provider --provider maas --execute
+python3 local-rag-platforms/fastgpt_local/fastgpt_local.py provider --provider deepseek-official --execute
+MAAS_EMBEDDING_ONLY=1 python3 local-rag-platforms/fastgpt_local/fastgpt_local.py provider --provider maas --execute
 ```
 
-The MaaS channel contains exactly `glm-5.2` and `bge-m3`; reranking is omitted
-unless both `MAAS_ENABLE_RERANKER=1` and an explicit reranker model are set.
-The execute path reads only `MAAS_API_KEY`, repairs one exact-name MaaS
-channel when needed, and verifies its saved type, base URL, model set, and
-model tests without printing credentials.
+The DeepSeek channel contains only `deepseek-v4-flash`; the MaaS channel
+contains only `bge-m3`. The execute paths read their dedicated keys, repair
+only the exact named channel when needed, and never print credentials.
 
 Sign in locally at `http://127.0.0.1:3000`. In **Account → Model Providers**,
-confirm the Huawei MaaS channel and ensure `glm-5.2`/`bge-m3` are enabled.
-`maas-models.example.json` is the source contract; do not import the historical
+confirm the DeepSeek and Huawei MaaS channels and ensure
+`deepseek-v4-flash`/`bge-m3` are enabled. `deepseek-models.example.json` and
+`maas-models.example.json` are the source contracts; do not import the historical
 `taas-models.example.json` for this benchmark. Create a local knowledge-base
 app wired to the smoke dataset, publish it, and create a local API key. Record
 only its app ID and key in the repository-root `.env`.

@@ -10,15 +10,17 @@
     "compose_required": ">=2.24"
   },
   "model_egress": "external",
-  "updated_at": "2026-08-20",
+  "updated_at": "2026-08-28",
   "current_evaluation": {
-    "dataset_id": "moi-rag-bench-v0.1-text-only-no-mllm",
-    "package": "datasets/moi-rag-bench-v0.1-raw-corpus/text_only_ready_for_eval",
-    "provider": "maas",
+    "dataset_id": "moi-rag-bench-v0.3.1-qa-revision",
+    "package": "datasets/moi-rag-bench-v0.3.1-qa-revision/ready_for_eval",
+    "provider_policy": "deepseek_text_maas_embedding",
+    "text_llm_provider": "deepseek-official",
+    "embedding_provider": "maas",
     "embedding_model": "bge-m3",
     "embedding_dimension": 1024,
-    "text_llm": "glm-5.2",
-    "judge": "glm-5.2",
+    "text_llm": "deepseek-v4-flash",
+    "judge": "deepseek-v4-flash",
     "thinking": {
       "type": "disabled"
     },
@@ -30,7 +32,7 @@
       "fastgpt_local",
       "maxkb_local"
     ],
-    "platform_versions_artifact": "runs/readiness/full-preflight-20260820-answer-repair/platform-versions.json",
+    "campaign_artifact": "runs/bench-v0.3.1-merged/campaign-summary.json",
     "historical_service_fields_are_non_authoritative": true
   },
   "services": {
@@ -55,10 +57,12 @@
       "status": "FROZEN",
       "evidence": "results/reports/MOI_rag_reproduction_guide.md",
       "active_benchmark": {
-        "provider": "maas",
+        "provider_policy": "deepseek_text_maas_embedding",
+        "text_llm_provider": "deepseek-official",
+        "embedding_provider": "maas",
         "embedding_model": "bge-m3",
         "embedding_dimension": 1024,
-        "text_llm": "glm-5.2",
+        "text_llm": "deepseek-v4-flash",
         "thinking": {"type": "disabled"},
         "mllm": "NOT_APPLICABLE"
       }
@@ -89,11 +93,13 @@
       "status": "LOCAL_VARIANT",
       "execution_result": "smoke_ready_44_document_readiness_2026_08_06",
       "active_benchmark": {
-        "provider": "maas",
-        "plugin_id": "matrixorigin/matrixorigin_huawei_maas/huawei_maas",
+        "provider_policy": "deepseek_text_maas_embedding",
+        "text_llm_provider": "deepseek-official",
+        "embedding_provider": "maas",
+        "embedding_plugin_id": "matrixorigin/matrixorigin_huawei_maas/huawei_maas",
         "embedding_model": "bge-m3",
         "embedding_dimension": 1024,
-        "text_llm": "glm-5.2",
+        "text_llm": "deepseek-v4-flash",
         "thinking": {"type": "disabled"},
         "mllm": "NOT_APPLICABLE"
       }
@@ -128,10 +134,12 @@
       "embedding_model": "qwen3-embedding-8b",
       "chat_model": "deepseek-v4-flash",
       "active_benchmark": {
-        "provider": "maas",
+        "provider_policy": "deepseek_text_maas_embedding",
+        "text_llm_provider": "deepseek-official",
+        "embedding_provider": "maas",
         "embedding_model": "bge-m3",
         "embedding_dimension": 1024,
-        "text_llm": "glm-5.2",
+        "text_llm": "deepseek-v4-flash",
         "thinking": {"type": "disabled"},
         "mllm": "NOT_APPLICABLE"
       }
@@ -178,14 +186,16 @@
       "chat_model": "Baidu Qianfan V2 deepseek-v4-flash",
       "direct_retrieval": "UNSUPPORTED_API",
       "active_benchmark": {
-        "provider": "maas",
+        "provider_policy": "deepseek_text_maas_embedding",
+        "text_llm_provider": "deepseek-official",
+        "embedding_provider": "maas",
         "embedding_model": "bge-m3",
         "embedding_dimension": 1024,
-        "text_llm": "glm-5.2",
+        "text_llm": "deepseek-v4-flash",
         "thinking": {"type": "disabled"},
         "mllm": "NOT_APPLICABLE",
         "retrieval_contract": "diagnostic_admin_hit_test",
-        "generation_contract": "external_maas_chat_completions"
+        "generation_contract": "external_deepseek_chat_completions"
       }
     }
   }

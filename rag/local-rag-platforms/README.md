@@ -9,9 +9,10 @@
 
 当前 MOI text-only serial benchmark 的 active contract 已冻结为：
 `moi_local → dify_local → fastgpt_local → maxkb_local`，所有平台使用 MaaS
-`bge-m3/1024` embedding 与 `glm-5.2` text LLM/Judge，`thinking={"type":"disabled"}`，
-无 MLLM/Qwen。历史 TaaS/Qianfan 配置仍可能出现在旧 smoke 记录或 legacy helper
-中，但 campaign 会过滤并拒绝它们；以
+`bge-m3/1024` embedding，以及 DeepSeek 官方 `deepseek-v4-flash` text LLM/Judge；
+`thinking={"type":"disabled"}`，无 MLLM/Qwen。历史 MaaS-only GLM、TaaS 和
+Qianfan 配置仍可能出现在旧 smoke 记录或 legacy helper 中，但 active campaign
+不会使用它们；以
 `scripts/evaluation/competitor_eval_campaign.py` 和
 `scripts/evaluation/competitor_eval_platform_contracts.json` 为准。
 
