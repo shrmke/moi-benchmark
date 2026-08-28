@@ -26,6 +26,8 @@ chmod 600 .env
 | 部署和评测 Dify、FastGPT、MaxKB、RAGFlow 等本地平台 | [`local-rag-platforms/README.md`](local-rag-platforms/README.md) |
 | 运行 MOI Benchmark Stage 1 | [`benchmarks/README-moi-rag-benchmark.md`](benchmarks/README-moi-rag-benchmark.md) |
 | 查看已整理的 canonical 结果和上传规则 | [`results/README.md`](results/README.md) |
+| 查看 MOI RAG v2.0 报告 | [`results/reports/MOI_rag_benchmark_v2.0.md`](results/reports/MOI_rag_benchmark_v2.0.md) |
+| 核对 v2.0 可审计快照 | [`results/reports/MOI_rag_benchmark_v2.0.provenance.json`](results/reports/MOI_rag_benchmark_v2.0.provenance.json) |
 | 查看 MOI RAG v1.0 报告 | [`results/reports/MOI_rag_benchmark_v1.0.md`](results/reports/MOI_rag_benchmark_v1.0.md) |
 | 查看复现报告 | [`results/reports/MOI_rag_reproduction_guide.md`](results/reports/MOI_rag_reproduction_guide.md) |
 
@@ -74,11 +76,39 @@ uv run --with pytest --with-requirements local-rag-platforms/api_console/require
 
 ## 结果与审计
 
-Benchmark 的原始响应、失败题、恢复轮次和 Judge 输入都应保留在对应 run 中。最终汇总只引用已冻结的 canonical 文件，并同时报告成功数、失败数、有效 Judge分母和协议边界。需要调整指标或结果时，优先修改生成脚本和 manifest，再重新生成汇总。
+Benchmark 的原始响应、失败题、恢复轮次和 Judge 输入都应保留在对应 run 中。最终汇总只引用已冻结的 canonical 文件，并同时报告成功数、失败数、有效 Judge 分母和协议边界。需要调整指标或结果时，优先修改生成脚本和 manifest，再重新生成汇总。
 
-本轮将 WikiEval、MMDocIR、DocBench、EnterpriseRAG-Bench 和 Lenovo-bench 的现有实验结果统一纳入 MOI RAG Benchmark v1.0，直接比较 MOI、Dify、FastGPT 与 MaxKB 在文本检索、长文档检索、复杂 PDF 问答、企业多源问答和证据链问答上的表现。
+v1.0 与 v2.0 是并行的两条研究线，不是前后替代关系：
 
-## 当前核心结果
+| 版本 | 数据基座 | 研究重点 | 入口 |
+|---|---|---|---|
+| **v1.0** | WikiEval、MMDocIR、DocBench、EnterpriseRAG-Bench、Lenovo-bench | 公开数据集上的任务与指标表现 | [报告](results/reports/MOI_rag_benchmark_v1.0.md) |
+| **v2.0** | 从 DocBench、EnterpriseRAG-Bench、MultiHop-RAG 收集、筛选并合并的混合数据集 | RAG 证据链质量 + 系统接口与服务交付能力 | [报告](results/reports/MOI_rag_benchmark_v2.0.md) · [Provenance](results/reports/MOI_rag_benchmark_v2.0.provenance.json) |
+
+## v2.0 当前核心结果
+
+v2.0 使用 **297 份文档、275 条纯文本 QA 和 275 条 Gold**，其中 245 条可回答、30 条拒答或不可回答。四平台统一使用 MaaS `bge-m3/1024` Embedding、DeepSeek V4 Flash 生成与 Judge，关闭 thinking，不调用 MLLM。
+
+| 平台 | C8 Request QPS | Lenovo 检索 P50 | Recall@1 | Recall@10 | Token F1 | Answer Relevance | Unsupported Claim↓ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **MOI** | 0.364 | 981.858 ms | **59.50%** | 61.95% | **30.05%** | 68.47% | 64.97% |
+| **Dify** | 0.450 | 1,369.693 ms | 54.34% | 83.33% | 24.12% | 55.49% | **60.64%** |
+| **FastGPT** | **9.926** | **443.851 ms** | 56.07% | **85.66%**¹ | 19.49% | 57.09% | 61.09% |
+| **MaxKB*** | 8.616 | 2,098.449 ms | 55.06% | 86.23%* | 29.00% | **69.31%** | 72.47% |
+
+¹ FastGPT 是严格原生 Recall@10 最高的平台。`MaxKB*` 使用管理诊断入口，并按 `comprehensive_score` 离线恢复排序，因此只作为带条件的诊断结果。
+
+这些指标分轨解释：C8 QPS 来自固定 `64 chunks × 10 ms` 的受控流式负载，不代表真实 RAG 或模型速度；Lenovo P50 是 10 条查询的完整检索合同耗时，包含 Query Embedding 与平台编排；Retrieval 分母为 265，词面和通用 Judge 分母为 275，回答型 Judge 分母为 245，严格拒答分母为 30。
+
+### v2.0 核心结论
+
+1. **MOI 的优势**：Recall@1 和 Token F1 为四平台最高，Answer Relevance 仅略低于 MaxKB*，说明首位命中、答案词面覆盖和问题相关性具有竞争力。
+2. **MOI 的短板**：Recall@1 到 Recall@10 只提升 2.45 个百分点；受控 C8 吞吐较低，Unsupported Claim Rate 仍为 64.97%，高 K 候选扩展、流式交付和证据约束是下一步重点。
+3. **没有跨维度冠军**：FastGPT 在严格原生高 K 召回、受控吞吐和 10-query 检索时延上领先；Dify 的 Unsupported Claim Rate 最低；MaxKB* 的候选覆盖和答案相关性较高，但检索排序使用诊断代换。
+
+## v1.0 公开数据集结果
+
+v1.0 将五类现有实验结果统一整理，用于比较四平台在文本检索、长文档检索、复杂 PDF 问答、企业多源问答和证据链问答上的表现。
 
 | 数据集 / 核心指标 | MOI | Dify | FastGPT | MaxKB | 核心结论 |
 | ----------------- | ---: | ---: | ------: | ----: | -------- |
@@ -88,7 +118,7 @@ Benchmark 的原始响应、失败题、恢复轮次和 Judge 输入都应保留
 | **EnterpriseRAG-Bench**<br>Doc R@10 / Complete@10 / Invalid Extras↓ / Correctness / Completeness | 80.59% / 74.68% / **2.345** / 49.20% / **58.74%** | 88.51% / 78.30% / 5.991 / 55.40% / 57.50% | **89.61%** / **85.53%** / 8.685 / **60.27%** / 57.95% | — | FastGPT 的召回与正确率最高；MOI 的无效文档最少、完整性最高 |
 | **Lenovo-bench**<br>Evidence R@10 / Complete@10 / Response Correctness / Reference Recall | 50.00% / 41.51% / 88.62% / 18.71% | 45.35% / 36.54% / 68.52% / 8.63% | **75.16%** / **62.26%** / 86.11% / **45.32%** | 60.35% / 58.11% / **91.07%** / 3.60% | FastGPT 的证据召回与答案覆盖最高；MaxKB 的已输出 claim 正确率最高，MOI 次之 |
 
-## 核心结论
+### v1.0 核心结论
 
 1. **MOI 的主要优势**：WikiEval 关键词覆盖最高，MMDocIR 布局召回最高，EnterpriseRAG-Bench 的无效额外文档最少且 Completeness 最高，体现出稳定文本链路、布局定位和低噪声证据组织能力。
 2. **MOI 的主要短板**：EnterpriseRAG-Bench 与 Lenovo-bench 的高 K 证据召回和完整证据集覆盖落后于 FastGPT；Lenovo-bench 的 Reference-claim Recall 偏低，DocBench 总体和多模态正确率仍有提升空间。
@@ -96,5 +126,7 @@ Benchmark 的原始响应、失败题、恢复轮次和 Judge 输入都应保留
 
 详细结果与复现说明：
 
-- [MOI RAG Benchmark v1.0](results/MOI_rag_benchmark_v1.0.md)
-- [MOI RAG 四平台五数据集实验复现报告](results/MOI_rag_reproduction_guide.md)
+- [MOI RAG Benchmark v2.0](results/reports/MOI_rag_benchmark_v2.0.md)
+- [MOI RAG Benchmark v2.0 Provenance](results/reports/MOI_rag_benchmark_v2.0.provenance.json)
+- [MOI RAG Benchmark v1.0](results/reports/MOI_rag_benchmark_v1.0.md)
+- [MOI RAG 四平台五数据集实验复现报告](results/reports/MOI_rag_reproduction_guide.md)
