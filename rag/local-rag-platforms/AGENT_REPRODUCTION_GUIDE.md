@@ -34,6 +34,11 @@ local-rag-platforms/
 它负责目标解析、认证头、请求协议、SSE/JSON 读取、并发/时延参数和报告落盘；
 它不负责启动或停止 Docker 服务，服务生命周期仍由各平台部署脚本负责。
 
+本次 500-document/1000-QA text-only campaign 的 provider policy 是严格
+MaaS-only：`bge-m3/1024`、`glm-5.2`、Judge 同为 `glm-5.2`，thinking disabled，
+`mllm=NOT_APPLICABLE`。不要把旧 TaaS/Qianfan/Qwen 示例当作当前配置；active
+campaign 会从子进程环境中移除这些 legacy provider 变量并 fail-closed。
+
 ## 2. 复现不变量
 
 - 一次只启动一个竞品服务栈；先检查端口和同名容器，避免相互污染。
@@ -49,7 +54,7 @@ local-rag-platforms/
 
 ```bash
 python3 -m compileall -q local-rag-platforms/api local-rag-platforms/scripts local-rag-platforms/tests
-uv run --with pytest pytest local-rag-platforms/tests -q
+uv run --with pytest --with-requirements local-rag-platforms/api_console/requirements.txt pytest local-rag-platforms/tests -q
 ```
 
 确认本机 Docker、Compose、Colima 和资源状态：

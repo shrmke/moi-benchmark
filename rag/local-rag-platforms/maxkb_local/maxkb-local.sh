@@ -172,6 +172,10 @@ run_qianfan_embedding() {
   exec python3 "$SCRIPT_DIR/maxkb_qianfan_embedding.py" "$@"
 }
 
+run_maas_models() {
+  exec python3 "$SCRIPT_DIR/maxkb_maas_models.py" "$@"
+}
+
 start_or_resume_maxkb() {
   local existing status base_url attempt
   existing=$(docker inspect --format '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)
@@ -185,7 +189,9 @@ start_or_resume_maxkb() {
     start_maxkb
   fi
 
-  if [[ "${COMPETITOR_EMBEDDING_PROVIDER:-}" == "qianfan" ]]; then
+  local selected_provider
+  selected_provider="${MAXKB_EMBEDDING_PROVIDER:-${COMPETITOR_EMBEDDING_PROVIDER:-}}"
+  if [[ "$selected_provider" == "qianfan" ]]; then
     base_url=${MAXKB_BASE_URL:-http://127.0.0.1:8090}
     status=""
     for attempt in $(seq 1 90); do
@@ -196,6 +202,17 @@ start_or_resume_maxkb() {
     [[ "$status" == "200" ]] || die "MaxKB did not become ready for Qianfan embedding registration"
     python3 "$SCRIPT_DIR/maxkb_refresh_admin_token.py"
     python3 "$SCRIPT_DIR/maxkb_qianfan_embedding.py" --execute register
+  elif [[ "$selected_provider" == "maas" ]]; then
+    base_url=${MAXKB_BASE_URL:-http://127.0.0.1:8090}
+    status=""
+    for attempt in $(seq 1 90); do
+      status=$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "$base_url/admin/" || true)
+      [[ "$status" == "200" ]] && break
+      sleep 2
+    done
+    [[ "$status" == "200" ]] || die "MaxKB did not become ready for MaaS model registration"
+    python3 "$SCRIPT_DIR/maxkb_refresh_admin_token.py"
+    python3 "$SCRIPT_DIR/maxkb_maas_models.py" register --execute --skip-provider-probe
   fi
 }
 
@@ -208,8 +225,9 @@ case "${1:-}" in
   smoke) run_smoke ;;
   full-chain) run_full_chain ;;
   qianfan-embedding) shift; run_qianfan_embedding "$@" ;;
+  maas-models) shift; run_maas_models "$@" ;;
   *)
-    printf 'usage: %s {verify-image|start|resume|stop|discover|smoke|full-chain|qianfan-embedding}\n' "$0" >&2
+    printf 'usage: %s {verify-image|start|resume|stop|discover|smoke|full-chain|qianfan-embedding|maas-models}\n' "$0" >&2
     exit 2
     ;;
 esac

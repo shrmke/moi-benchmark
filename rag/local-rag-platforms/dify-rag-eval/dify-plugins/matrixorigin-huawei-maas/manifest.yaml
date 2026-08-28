@@ -1,0 +1,32 @@
+version: 0.0.1
+type: plugin
+author: matrixorigin
+name: matrixorigin_huawei_maas
+label:
+  en_US: MatrixOrigin Huawei Cloud MaaS
+  zh_Hans: MatrixOrigin 华为云 MaaS
+description:
+  en_US: Text-only Huawei Cloud MaaS GLM chat and BGE-M3 embedding provider.
+  zh_Hans: 仅文本的华为云 MaaS GLM 对话与 BGE-M3 嵌入提供商。
+created_at: "2026-08-20T00:00:00+08:00"
+icon: icon.svg
+privacy: PRIVACY.md
+resource:
+  memory: 134217728
+  permission:
+    model:
+      enabled: true
+      llm: true
+      text_embedding: true
+plugins:
+  models:
+    - provider/huawei_maas.yaml
+meta:
+  version: 0.0.1
+  arch:
+    - amd64
+    - arm64
+  runner:
+    language: python
+    version: "3.12"
+    entrypoint: main

@@ -7,6 +7,14 @@
 当前支持的统一目标是 `moi`、`dify`、`fastgpt`、`maxkb`、`ragflow`。平台服务
 必须串行运行：一次只启动一个竞品栈，先检查端口和同名容器，再执行真实请求。
 
+当前 MOI text-only serial benchmark 的 active contract 已冻结为：
+`moi_local → dify_local → fastgpt_local → maxkb_local`，所有平台使用 MaaS
+`bge-m3/1024` embedding 与 `glm-5.2` text LLM/Judge，`thinking={"type":"disabled"}`，
+无 MLLM/Qwen。历史 TaaS/Qianfan 配置仍可能出现在旧 smoke 记录或 legacy helper
+中，但 campaign 会过滤并拒绝它们；以
+`scripts/evaluation/competitor_eval_campaign.py` 和
+`scripts/evaluation/competitor_eval_platform_contracts.json` 为准。
+
 ## 目录结构
 
 ```text
@@ -59,7 +67,7 @@ cp .env.example .env
 chmod 600 .env
 
 python3 -m compileall -q local-rag-platforms/api local-rag-platforms/scripts local-rag-platforms/tests
-uv run --with pytest pytest local-rag-platforms/tests -q
+uv run --with pytest --with-requirements local-rag-platforms/api_console/requirements.txt pytest local-rag-platforms/tests -q
 python3 local-rag-platforms/scripts/deployment/prepare_local_services.py preflight
 docker version
 docker compose version

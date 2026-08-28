@@ -15,7 +15,7 @@ SECRET_DIR = ROOT / ".local-services/maxkb_local/secrets"
 
 
 def main() -> int:
-    base = os.getenv("MAXKB_BASE_URL", "http://127.0.0.1:8090").rstrip("/")
+    base = (os.getenv("MAXKB_BASE_URL", "").strip() or "http://127.0.0.1:8090").rstrip("/")
     request_path = Path(
         os.getenv("MAXKB_LOGIN_REQUEST_FILE", str(SECRET_DIR / "login-request.json"))
     )

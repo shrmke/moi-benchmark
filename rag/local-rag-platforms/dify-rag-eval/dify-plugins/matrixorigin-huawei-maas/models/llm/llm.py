@@ -1,31 +1,37 @@
 from __future__ import annotations
 
-from collections.abc import Generator
 import os
+from collections.abc import Generator
 from typing import Optional
 
 from dify_plugin import OAICompatLargeLanguageModel
 from dify_plugin.entities.model.llm import LLMResult, LLMResultChunk
 from dify_plugin.entities.model.message import PromptMessage, PromptMessageTool
+from dify_plugin.errors.model import InvokeBadRequestError
+
+from models.shared import validate_base_url
 
 
 DEFAULT_MAAS_BASE_URL = "https://api.modelarts-maas.com/v1"
 MAAS_GLM_MODEL = "glm-5.2"
 
 
-def _normalise_url(value: object) -> str:
-    return str(value or "").strip().rstrip("/")
-
-
 def is_huawei_maas_glm(model: str, credentials: dict) -> bool:
-    """Identify only the exact MaaS GLM contract, leaving legacy providers alone."""
-
     configured_base_url = credentials.get("base_url") or os.getenv("MAAS_BASE_URL", DEFAULT_MAAS_BASE_URL)
     expected_base_url = os.getenv("MAAS_BASE_URL", DEFAULT_MAAS_BASE_URL)
     return (
         str(model).strip() == MAAS_GLM_MODEL
-        and _normalise_url(configured_base_url) == _normalise_url(expected_base_url)
+        and validate_base_url(configured_base_url) == validate_base_url(expected_base_url)
     )
+
+
+def _validate_contract(model: str, credentials: dict) -> None:
+    if str(model).strip() != MAAS_GLM_MODEL:
+        raise InvokeBadRequestError(f"Huawei MaaS text-only plugin only serves {MAAS_GLM_MODEL}")
+    configured_base_url = credentials.get("base_url") or os.getenv("MAAS_BASE_URL", DEFAULT_MAAS_BASE_URL)
+    expected_base_url = os.getenv("MAAS_BASE_URL", DEFAULT_MAAS_BASE_URL)
+    if validate_base_url(configured_base_url) != validate_base_url(expected_base_url):
+        raise InvokeBadRequestError("Huawei MaaS credentials must use the official HTTPS v1 endpoint")
 
 
 def prepare_huawei_maas_model_parameters(
@@ -33,19 +39,21 @@ def prepare_huawei_maas_model_parameters(
     credentials: dict,
     model_parameters: dict,
 ) -> dict:
-    """Add MaaS GLM's required disabled-thinking mode without mutating input."""
+    """Add MaaS GLM's required thinking mode without mutating caller state."""
 
+    _validate_contract(model, credentials)
     prepared = dict(model_parameters)
     if is_huawei_maas_glm(model, credentials):
         prepared["thinking"] = {"type": "disabled"}
     return prepared
 
 
-class MatrixOriginTaaSLargeLanguageModel(OAICompatLargeLanguageModel):
-    """Use the SDK's OpenAI-compatible chat implementation with TaaS credentials."""
+class HuaweiMaaSLargeLanguageModel(OAICompatLargeLanguageModel):
+    """OpenAI-compatible Huawei MaaS chat with deterministic GLM thinking."""
 
     @staticmethod
     def _oai_credentials(model: str, credentials: dict) -> dict:
+        _validate_contract(model, credentials)
         mapped = dict(credentials)
         mapped.update(
             {
