@@ -48,7 +48,7 @@
 
 - `local-rag-platforms/scripts/evaluation/competitor_eval_runner.py`：Dify documents API 分页聚合；恢复时复用 `submitted + remote_id`，避免重复上传。
 - `local-rag-platforms/tests/test_competitor_eval_runner.py`：对应聚焦测试。
-- 验证命令：`uv run --with pytest pytest local-rag-platforms/tests/test_competitor_eval_runner.py -q -k 'dify_readiness or dify_global_ingest_reuses_submitted_remote_documents'`
+- 验证命令：`uv run --with pytest --with-requirements local-rag-platforms/api_console/requirements.txt pytest local-rag-platforms/tests/test_competitor_eval_runner.py -q -k 'dify_readiness or dify_global_ingest_reuses_submitted_remote_documents'`
 - 结果：`3 passed, 39 deselected`。
 
 ## 若再次中断时的恢复顺序

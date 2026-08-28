@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safe, resumable evaluation runner for the three local RAG platforms.
+"""Safe, resumable evaluation runner for the four local RAG platforms.
 
 The runner consumes a ``competitor-eval-ready-v1`` package and exposes four
 stages: ``preflight``, ``ingest``, ``retrieval``, ``qa`` and ``all``.  It is
@@ -14,7 +14,11 @@ deliberately conservative at the product boundary:
   resources;
 * unsupported media and unsupported product contracts are terminal records,
   not filtered-out rows; and
-* only Qianfan and MaaS are admitted.  TaaS is rejected before any request.
+* text generation is frozen to DeepSeek ``deepseek-v4-flash`` using the
+  dedicated ``DEEPSEEK_API_KEY_NEW`` credential, while embeddings remain
+  frozen to Huawei MaaS ``bge-m3``; and
+* Qianfan, TaaS, MatrixOrigin, and cross-provider credential fallbacks are
+  rejected before any request.
 
 The module is intentionally dependency-free beyond the Python standard
 library and the existing local helper module.  Tests replace ArtifactHTTP;
@@ -35,7 +39,9 @@ import mimetypes
 import os
 import re
 import shutil
+import shlex
 import stat
+import subprocess
 import sys
 import threading
 import time
@@ -86,10 +92,18 @@ DifyAppBinding = DifyNativeDatasetBinding
 CONTRACT_PATH = HERE / "competitor_eval_platform_contracts.json"
 CONTRACTS: dict[str, Any] = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
 PACKAGE_SCHEMA = str(CONTRACTS["package_schema"])
-SYSTEMS = ("dify_local", "fastgpt_local", "maxkb_local")
+SYSTEMS = ("moi_local", "dify_local", "fastgpt_local", "maxkb_local")
 STAGES = ("preflight", "ingest", "retrieval", "qa", "all")
 GLOBAL_RESOURCE = "__global__"
 DEFAULT_TOP_K = [1, 3, 5, 10]
+THINKING_CONFIG = dict(CONTRACTS["defaults"].get("thinking", {"type": "disabled"}))
+SHARED_PROMPT_VERSION = "competitor-eval-shared-rag-v1"
+SHARED_PROMPT_TEXT = (
+    "Answer the question using only the supplied retrieved context. "
+    "If the context is insufficient, say so briefly. Keep the answer concise."
+)
+SHARED_PROMPT_HASH = f"sha256:{hashlib.sha256(SHARED_PROMPT_TEXT.encode('utf-8')).hexdigest()}"
+DEFAULT_MAX_OUTPUT_TOKENS = 1024
 MEDIA_ALIASES = {
     "txt": "text",
     "text/plain": "text",
@@ -114,7 +128,23 @@ TERMINAL_STATUSES = {
     "UNSUPPORTED",
     "INTERRUPTED",
 }
-SECRET_WORDS = ("taas", "matrixorigin")
+# Reject the legacy MatrixOrigin TaaS channel and endpoint, while allowing
+# the separately named Huawei Cloud MaaS plugin owned by MatrixOrigin.
+# Retired/non-MaaS provider or model markers.  Keep the parser-compatible
+# legacy CLI fields, but never allow these values to become an active profile.
+SECRET_WORDS = (
+    "taas",
+    "matrixorigin_taas",
+    "matrixorigin.cn",
+    "qianfan",
+    "baidubce",
+    "qwen",
+)
+MAAS_HOST = "api.modelarts-maas.com"
+DEEPSEEK_HOST = "api.deepseek.com"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEFAULT_DEEPSEEK_LLM_MODEL = "deepseek-v4-flash"
+DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY_NEW"
 DIFY_GENERIC_OAI_ADAPTER = "matrixorigin/matrixorigin_taas/matrixorigin_taas"
 # Dify's public dataset hit-testing payload validates ``query`` at 250
 # characters.  Keep the original benchmark question in the terminal ledger,
@@ -125,11 +155,21 @@ DIFY_RETRIEVAL_QUERY_MAX_CHARS = 250
 # the provider smoke large enough to observe the final completion token.
 PROVIDER_CHAT_PROBE_MAX_TOKENS = 256
 FASTGPT_MAAS_QA_MIN_INTERVAL_DEFAULT = 1.1
-MAXKB_QIANFAN_QA_MIN_INTERVAL_DEFAULT = 1.1
+MAXKB_LEGACY_QA_MIN_INTERVAL_DEFAULT = 1.1  # compatibility name; native MaxKB QA is unreachable
 # MaxKB's OpenAI-compatible endpoint may front an external model even when
 # the runner's own text provider is MaaS.  The observed provider quota is
 # 15 requests/minute, so keep a conservative default for the native QA path.
 MAXKB_QA_MIN_INTERVAL_DEFAULT = 4.1
+MAXKB_MAAS_PROVIDER = "model_openai_provider"
+MAXKB_EXTERNAL_QA_CONTRACT = "external_generation_from_maxkb_retrieval"
+MAXKB_QA_COMPARABILITY = "diagnostic_admin_retrieval_plus_external_deepseek_generation"
+# MaxKB's diagnostic hit-test returns the full paragraph plus all of its
+# internal chunks. Sending five full documents to MaaS can exceed the model
+# gateway's content-safety/context boundary even though the native MaxKB
+# endpoint would normally select a much smaller context. Use ranked chunks for
+# the external-generation compatibility path and keep the wire budget bounded.
+MAXKB_EXTERNAL_CONTEXT_CHARS = 16000
+MAXKB_EXTERNAL_MAX_CHUNKS = 64
 DIFY_MAX_INDEXING_SCOPES_DEFAULT = 3
 DIFY_MAX_INDEXING_SCOPES_LIMIT = 16
 QA_CONCURRENCY_DEFAULT = 4
@@ -246,6 +286,17 @@ def _bounded_unique_name(value: Any, limit: int) -> str:
         return cleaned
     digest = hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:12]
     return f"{cleaned[: limit - len(digest) - 1]}-{digest}"
+
+
+def _moi_identifier(value: Any, limit: int = 48) -> str:
+    """Return a stable SQL identifier component unique to this run/resource."""
+
+    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", str(value)).strip("_") or "run"
+    if cleaned[0].isdigit():
+        cleaned = f"r_{cleaned}"
+    digest = hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:10]
+    prefix_limit = max(1, limit - len(digest) - 1)
+    return f"{cleaned[:prefix_limit]}_{digest}"
 
 
 def _enabled(value: Any) -> bool:
@@ -713,6 +764,35 @@ def _manifest_path(package: Path) -> tuple[Path, Path]:
     )
 
 
+def _validate_declared_counts(
+    manifest: Mapping[str, Any],
+    actual: Mapping[str, int],
+    *,
+    error_prefix: str = "PACKAGE",
+) -> None:
+    """Check manifest counts when a package declares them.
+
+    Older ready packages intentionally omit some counts, so this is a
+    conditional admission check rather than a new requirement for every
+    historical package.  The derived MOI text-only package declares all three
+    counts and therefore cannot silently drift between build and execution.
+    """
+
+    declared = manifest.get("counts")
+    if not isinstance(declared, Mapping):
+        return
+    for key, observed in actual.items():
+        if key not in declared:
+            continue
+        value = declared[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise PackageError(f"{error_prefix}_DECLARED_COUNT_INVALID:{key}")
+        if value != observed:
+            raise PackageError(
+                f"{error_prefix}_COUNT_MISMATCH:{key}:declared={value}:actual={observed}"
+            )
+
+
 def _normal_media(value: Any, path: Path | None = None) -> list[str]:
     raw: list[Any]
     if value is None:
@@ -1042,6 +1122,7 @@ class EvalPackage:
         if gold_spec is None:
             gold_spec = _artifact_path(manifest, raw_manifest, root, ("gold.jsonl", "gold"))
         gold_by_question: dict[str, dict[str, Any]] = {}
+        gold_count = 0
         if gold_spec is not None:
             gold_values, _ = (
                 (iter(gold_spec), None)
@@ -1049,10 +1130,13 @@ class EvalPackage:
                 else _iter_records(gold_spec, root, "gold")
             )
             for ordinal, gold_item in enumerate(gold_values, start=1):
+                gold_count += 1
                 if not isinstance(gold_item, dict):
                     raise PackageError(f"PACKAGE_GOLD_RECORD_INVALID: {ordinal}")
                 gold_id = str(gold_item.get("id") or gold_item.get("question_id") or "")
                 if gold_id:
+                    if gold_id in gold_by_question:
+                        raise PackageError(f"PACKAGE_GOLD_ID_DUPLICATE: {gold_id}")
                     gold_by_question[gold_id] = _compact_question_raw(gold_item)
 
         questions: list[Question] = []
@@ -1139,6 +1223,25 @@ class EvalPackage:
             raise PackageError("PACKAGE_DOCUMENTS_EMPTY")
         if not questions:
             raise PackageError("PACKAGE_QUESTIONS_EMPTY")
+        if condition == "text-only-no-mllm":
+            _validate_declared_counts(
+                manifest,
+                {"documents": len(documents), "questions": len(questions), "gold": gold_count},
+            )
+            if manifest.get("mllm_required") is not False:
+                raise PackageError("TEXT_ONLY_MLLM_REQUIRED_MUST_BE_FALSE")
+            if str(manifest.get("image_llm", "")).strip().upper() != "NOT_APPLICABLE":
+                raise PackageError("TEXT_ONLY_IMAGE_LLM_MUST_BE_NOT_APPLICABLE")
+            non_text_media = {
+                media
+                for document in documents
+                for media in document.media
+                if media not in {"text", "markdown"}
+            }
+            if non_text_media:
+                raise PackageError(
+                    f"TEXT_ONLY_DOCUMENT_MEDIA_UNSUPPORTED:{sorted(non_text_media)}"
+                )
 
         dataset_value = manifest.get("dataset", manifest.get("dataset_id", "UNKNOWN"))
         dataset = str(dataset_value.get("name") if isinstance(dataset_value, dict) else dataset_value)
@@ -1292,6 +1395,7 @@ class ProviderProfile:
     image_model: str = ""
     embedding_model: str = ""
     embedding_dimension: int | None = None
+    api_key_env: str = ""
 
     def public(self) -> dict[str, Any]:
         return {
@@ -1302,6 +1406,7 @@ class ProviderProfile:
             "image_model": self.image_model,
             "embedding_model": self.embedding_model,
             "embedding_dimension": self.embedding_dimension,
+            "api_key_env": self.api_key_env,
         }
 
 
@@ -1318,7 +1423,41 @@ def _reject_taas(values: Iterable[Any]) -> None:
     for value in values:
         text = str(value or "").lower()
         if any(marker in text for marker in SECRET_WORDS):
-            raise RunnerError("TAAS_PROVIDER_REFUSED: this runner only admits Qianfan and MaaS")
+            raise RunnerError("FROZEN_PROVIDER_REQUIRED: TaaS/Qianfan/MatrixOrigin provider is forbidden")
+
+
+def _validate_maas_base_url(value: Any) -> None:
+    raw = str(value or "").strip()
+    try:
+        parsed = urlsplit(raw)
+        port = parsed.port
+    except ValueError as exc:
+        raise RunnerError("MAAS_ONLY_BASE_URL_REQUIRED") from exc
+    if (
+        parsed.scheme.casefold() != "https"
+        or (parsed.hostname or "").casefold() != MAAS_HOST
+        or port not in (None, 443)
+        or parsed.username
+        or parsed.password
+    ):
+        raise RunnerError("MAAS_ONLY_BASE_URL_REQUIRED")
+
+
+def _validate_deepseek_base_url(value: Any) -> None:
+    raw = str(value or "").strip()
+    try:
+        parsed = urlsplit(raw)
+        port = parsed.port
+    except ValueError as exc:
+        raise RunnerError("DEEPSEEK_OFFICIAL_BASE_URL_REQUIRED") from exc
+    if (
+        parsed.scheme.casefold() != "https"
+        or (parsed.hostname or "").casefold() != DEEPSEEK_HOST
+        or port not in (None, 443)
+        or parsed.username
+        or parsed.password
+    ):
+        raise RunnerError("DEEPSEEK_OFFICIAL_BASE_URL_REQUIRED")
 
 
 def _reject_dify_adapters(values: Iterable[Any], *, allow_generic_compat: bool) -> None:
@@ -1336,95 +1475,106 @@ def _provider_profiles(
     *,
     image_question_count: int = 0,
 ) -> dict[str, ProviderProfile]:
-    qianfan_base = str(
-        getattr(args, "qianfan_base_url", None)
-        or value_from(env, "QIANFAN_BASE_URL", default=str(CONTRACTS["defaults"]["qianfan_base_url"]))
-    ).rstrip("/")
+    """Resolve the frozen DeepSeek-text + MaaS-embedding contract.
+
+    Legacy MaaS/Qianfan text arguments remain parser-compatible only for
+    checkpoint diagnostics; they are never materialized into a text profile.
+    This prevents a stale platform .env from becoming an implicit fallback or
+    silently spending against the retired GLM text route.
+    """
+
     maas_base = str(
         getattr(args, "maas_base_url", None)
         or value_from(env, "MAAS_BASE_URL", default=str(CONTRACTS["defaults"]["maas_base_url"]))
     ).rstrip("/")
-    qianfan_model = str(
-        getattr(args, "qianfan_llm_model", None)
-        or value_from(env, "QIANFAN_LLM_MODEL", default=str(CONTRACTS["defaults"]["qianfan_llm_model"]))
-    )
-    image_model = str(
-        getattr(args, "qianfan_image_llm_model", None)
-        or value_from(env, "QIANFAN_IMAGE_LLM_MODEL", "QIANFAN_VISION_MODEL", default=str(CONTRACTS["defaults"]["qianfan_image_llm_model"]))
-    )
+    _validate_maas_base_url(maas_base)
+    # The derived package is text-only. Keep the legacy CLI field readable for
+    # old checkpoints, but never carry a vision model into this contract.
+    maas_vl_model = "NOT_APPLICABLE"
     text_llm_provider = str(
         getattr(args, "text_llm_provider", None)
         or value_from(
             env,
-            "FASTGPT_LLM_PROVIDER",
             "COMPETITOR_TEXT_LLM_PROVIDER",
-            default="qianfan",
+            default=str(CONTRACTS["defaults"].get("text_llm_provider", "deepseek-official")),
         )
     ).casefold()
-    if text_llm_provider not in {"qianfan", "maas"}:
-        raise RunnerError(f"UNSUPPORTED_TEXT_LLM_PROVIDER:{text_llm_provider}")
-    if text_llm_provider == "maas" and image_question_count:
-        raise RunnerError("MAAS_TEXT_LLM_CANNOT_SERVE_MULTIMODAL_QUESTIONS")
-    maas_llm_model = str(
-        getattr(args, "maas_llm_model", None)
-        or value_from(env, "MAAS_LLM_MODEL", default="deepseek-v4-flash")
+    if text_llm_provider not in {"deepseek", "deepseek-official", "dsv4f"}:
+        raise RunnerError("DEEPSEEK_TEXT_PROVIDER_REQUIRED")
+    deepseek_base = str(
+        getattr(args, "deepseek_base_url", None)
+        or value_from(
+            env,
+            "DEEPSEEK_BASE_URL",
+            default=str(CONTRACTS["defaults"].get("deepseek_base_url", DEFAULT_DEEPSEEK_BASE_URL)),
+        )
+    ).rstrip("/")
+    _validate_deepseek_base_url(deepseek_base)
+    deepseek_llm_model = str(
+        getattr(args, "deepseek_llm_model", None)
+        or value_from(
+            env,
+            "DEEPSEEK_LLM_MODEL",
+            default=str(CONTRACTS["defaults"].get("deepseek_llm_model", DEFAULT_DEEPSEEK_LLM_MODEL)),
+        )
     )
     embedding_provider = value_from(env, "COMPETITOR_EMBEDDING_PROVIDER", default="maas").casefold()
-    if embedding_provider not in {"maas", "qianfan"}:
-        raise RunnerError(f"UNSUPPORTED_EMBEDDING_PROVIDER:{embedding_provider}")
+    if embedding_provider != "maas":
+        raise RunnerError("MAAS_ONLY_EMBEDDING_PROVIDER_REQUIRED")
     embedding_model = str(
         getattr(args, "maas_embedding_model", None)
         or value_from(
             env,
-            "QIANFAN_EMBEDDING_MODEL" if embedding_provider == "qianfan" else "MAAS_EMBEDDING_MODEL",
-            default="qwen3-embedding-8b" if embedding_provider == "qianfan" else str(CONTRACTS["defaults"]["maas_embedding_model"]),
+            "MAAS_EMBEDDING_MODEL",
+            default=str(CONTRACTS["defaults"]["maas_embedding_model"]),
         )
     )
     dimension = int(
         getattr(args, "maas_embedding_dimension", None)
         or value_from(
             env,
-            "QIANFAN_EMBEDDING_DIMENSION" if embedding_provider == "qianfan" else "MAAS_EMBEDDING_DIMENSION",
-            default="4096" if embedding_provider == "qianfan" else str(CONTRACTS["defaults"]["maas_embedding_dimension"]),
+            "MAAS_EMBEDDING_DIMENSION",
+            default=str(CONTRACTS["defaults"]["maas_embedding_dimension"]),
         )
     )
+    expected_llm = str(CONTRACTS["defaults"].get("deepseek_llm_model", DEFAULT_DEEPSEEK_LLM_MODEL))
+    expected_embedding = str(CONTRACTS["defaults"]["maas_embedding_model"])
+    expected_dimension = int(CONTRACTS["defaults"]["maas_embedding_dimension"])
+    if deepseek_llm_model != expected_llm:
+        raise RunnerError(f"DEEPSEEK_TEXT_MODEL_REQUIRED:{expected_llm}")
+    if embedding_model != expected_embedding or dimension != expected_dimension:
+        raise RunnerError(f"MAAS_ONLY_EMBEDDING_REQUIRED:{expected_embedding}/{expected_dimension}")
     _reject_taas([
-        qianfan_base,
         maas_base,
-        qianfan_model,
-        maas_llm_model,
-        image_model,
+        deepseek_base,
+        deepseek_llm_model,
+        maas_vl_model,
         embedding_model,
     ])
-    qianfan = ProviderProfile(
-        name="qianfan",
-        base_url=qianfan_base,
-        api_key=value_from(env, "QIANFAN_API_KEY", "QIANFAN_APIKEY"),
-        model=qianfan_model,
-        image_model=image_model,
-    )
     embedding = ProviderProfile(
-        name=embedding_provider,
-        base_url=qianfan_base if embedding_provider == "qianfan" else maas_base,
-        api_key=(
-            value_from(env, "QIANFAN_API_KEY", "QIANFAN_APIKEY")
-            if embedding_provider == "qianfan"
-            else value_from(env, "MAAS_API_KEY", "MAAS_APIKEY")
-        ),
-        model="",
-        embedding_model=embedding_model,
-        embedding_dimension=dimension,
-    )
-    maas_llm = ProviderProfile(
         name="maas",
         base_url=maas_base,
         api_key=value_from(env, "MAAS_API_KEY", "MAAS_APIKEY"),
-        model=maas_llm_model,
+        model="",
+        embedding_model=embedding_model,
+        embedding_dimension=dimension,
+        api_key_env="MAAS_API_KEY",
     )
-    text_llm = qianfan if text_llm_provider == "qianfan" else maas_llm
-    # Keep the historical ``maas`` key as an internal compatibility alias;
-    # the profile's public name records the actual selected provider.
-    return {"qianfan": qianfan, "maas": embedding, "llm": text_llm}
+    text_llm = ProviderProfile(
+        name="deepseek-official",
+        base_url=deepseek_base,
+        api_key=value_from(env, DEEPSEEK_API_KEY_ENV),
+        model=deepseek_llm_model,
+        api_key_env=DEEPSEEK_API_KEY_ENV,
+    )
+    vision = ProviderProfile(
+        name="maas",
+        base_url=maas_base,
+        api_key=value_from(env, "MAAS_API_KEY", "MAAS_APIKEY"),
+        model="NOT_APPLICABLE",
+        api_key_env="MAAS_API_KEY",
+    )
+    return {"maas": embedding, "llm": text_llm, "vision": vision}
 
 
 def _metric_contract(args: argparse.Namespace, package: EvalPackage) -> dict[str, Any]:
@@ -1532,6 +1682,115 @@ def _percentile(values: list[float], fraction: float) -> float | None:
 
 def _tokens(value: str) -> list[str]:
     return re.findall(r"[\w\u4e00-\u9fff]+", value.lower(), flags=re.UNICODE)
+
+
+_MAXKB_CONTEXT_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "does",
+    "for",
+    "from",
+    "how",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "to",
+    "was",
+    "what",
+    "which",
+    "who",
+    "with",
+}
+
+
+def _maxkb_external_context(
+    hits: Iterable[Any],
+    question: str,
+    *,
+    max_chars: int = MAXKB_EXTERNAL_CONTEXT_CHARS,
+    max_chunks: int = MAXKB_EXTERNAL_MAX_CHUNKS,
+) -> str:
+    """Select a bounded lexical evidence window from MaxKB hit-test rows.
+
+    MaxKB 2.10.4 exposes ``chunks`` as the product's internal paragraph
+    segmentation, but its admin hit-test row also contains the entire source
+    paragraph in ``content``. Prefer chunks that share non-stopword terms with
+    the question; this approximates the product's native context selection and
+    prevents the external MaaS compatibility path from sending entire books or
+    news articles. If no chunk matches, retain only a short prefix per hit so
+    an unanswerable question remains auditable without shipping the full corpus.
+    """
+
+    budget = max(1, int(max_chars))
+    chunk_limit = max(1, int(max_chunks))
+    terms = set(_tokens(question)) - _MAXKB_CONTEXT_STOPWORDS
+    ranked: list[tuple[int, float, int, int, str]] = []
+    fallback: list[tuple[float, int, str]] = []
+    for hit_index, hit in enumerate(hits):
+        if not isinstance(hit, Mapping):
+            continue
+        try:
+            score_value = float(hit.get("comprehensive_score", hit.get("similarity", 0)) or 0)
+        except (TypeError, ValueError):
+            score_value = 0.0
+        content = str(
+            hit.get("content")
+            or hit.get("paragraph_content")
+            or hit.get("text")
+            or hit.get("document_content")
+            or ""
+        ).strip()
+        if content:
+            fallback.append((score_value, hit_index, content))
+        chunks = hit.get("chunks")
+        if not isinstance(chunks, list):
+            continue
+        for chunk_index, chunk in enumerate(chunks):
+            text = str(chunk or "").strip()
+            if not text:
+                continue
+            chunk_terms = set(_tokens(text))
+            overlap = len(terms & chunk_terms)
+            if overlap:
+                ranked.append((overlap, score_value, hit_index, chunk_index, text))
+
+    ranked.sort(key=lambda item: (-item[0], -item[1], item[2], item[3]))
+    selected: list[str] = []
+    used_chars = 0
+    for _overlap, _score, hit_index, chunk_index, text in ranked[:chunk_limit]:
+        row = f"[hit {hit_index + 1} chunk {chunk_index + 1}] {text}"
+        if used_chars + len(row) > budget:
+            remaining = budget - used_chars
+            if remaining > 80:
+                selected.append(row[:remaining])
+            break
+        selected.append(row)
+        used_chars += len(row) + 2
+    if selected:
+        return "\n\n".join(selected)
+
+    fallback.sort(key=lambda item: (-item[0], item[1]))
+    for _score, hit_index, content in fallback:
+        row = f"[hit {hit_index + 1} prefix] {content[:512]}"
+        if used_chars + len(row) > budget:
+            remaining = budget - used_chars
+            if remaining > 80:
+                selected.append(row[:remaining])
+            break
+        selected.append(row)
+        used_chars += len(row) + 2
+    return "\n\n".join(selected) or "(No relevant MaxKB context was retrieved.)"
 
 
 def _token_f1(prediction: str, answer: str) -> float | None:
@@ -1679,9 +1938,15 @@ class RunnerContext:
     _http_clients: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _artifact_http_counter: int = field(default=0, init=False, repr=False)
     _maas_qa_rate_limiter: Any = field(default=None, init=False, repr=False)
+    _moi_artifacts: dict[str, dict[str, Any]] = field(default_factory=dict, init=False, repr=False)
+    _moi_result_offsets: dict[Path, dict[str, int]] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.env = _merge_env_files(self.args.system)
+        if self.args.system == "moi_local" and _enabled(value_from(self.env, "MOI_EVAL_FIXTURE")) and not self.args.dry_run:
+            raise RunnerError("TEST_FIXTURE_FORBIDDEN")
+        if self.package.image_question_count != 0:
+            raise RunnerError("TEXT_ONLY_IMAGE_QUESTION_COUNT_MUST_BE_0")
         self.args.qa_concurrency = _qa_concurrency(self.args, self.env)
         configured_retrieval = getattr(self.args, "retrieval_concurrency", None) or value_from(
             self.env, "COMPETITOR_EVAL_RETRIEVAL_CONCURRENCY", default="8"
@@ -1696,12 +1961,15 @@ class RunnerContext:
             self.env,
             image_question_count=self.package.image_question_count,
         )
+        if self.args.system == "maxkb_local":
+            configured_maxkb_embedding = value_from(self.env, "MAXKB_EMBEDDING_PROVIDER").casefold()
+            if configured_maxkb_embedding and configured_maxkb_embedding != "maas":
+                raise RunnerError("MAAS_ONLY_EMBEDDING_PROVIDER_REQUIRED")
+        configured_fastgpt_embedding = value_from(self.env, "FASTGPT_EMBEDDING_PROVIDER").casefold()
+        if configured_fastgpt_embedding and configured_fastgpt_embedding != "maas":
+            raise RunnerError("MAAS_ONLY_EMBEDDING_PROVIDER_REQUIRED")
         interval = 0.0
-        if (
-            self.args.system == "fastgpt_local"
-            and self.profiles["llm"].name == "maas"
-            and self.profiles["llm"].model == "deepseek-v4-flash"
-        ):
+        if self.args.system == "fastgpt_local":
             raw_interval = value_from(
                 self.env,
                 "FASTGPT_MAAS_QA_MIN_INTERVAL_SECONDS",
@@ -1717,8 +1985,8 @@ class RunnerContext:
                 "MAXKB_QA_MIN_INTERVAL_SECONDS",
                 default=value_from(
                     self.env,
-                    "MAXKB_QIANFAN_QA_MIN_INTERVAL_SECONDS",
-                    default=str(MAXKB_QA_MIN_INTERVAL_DEFAULT),
+                    "MAXKB_LEGACY_QA_MIN_INTERVAL_SECONDS",
+                    default=str(MAXKB_LEGACY_QA_MIN_INTERVAL_DEFAULT),
                 ),
             )
             try:
@@ -1734,6 +2002,8 @@ class RunnerContext:
         self.root.mkdir(parents=True, exist_ok=True)
         self._artifact_http_counter = self._existing_http_counter()
         self.progress = self._progress()
+        if self.args.system == "moi_local":
+            self._materialize_moi_artifacts()
         self._prepare_immutable_artifacts()
         self._record_provider_adjustment()
 
@@ -1771,7 +2041,7 @@ class RunnerContext:
                 "text_llm_provider": expected_provider.get("text_llm_provider"),
                 "text_llm_model": expected_provider.get("text_llm_model"),
             },
-            "reason": "operator_requested_text_only_maas_model_resume",
+            "reason": "operator_requested_text_only_provider_resume",
         }
         path = self.root / "resume-provider-adjustment.json"
         if path.exists():
@@ -1882,24 +2152,40 @@ class RunnerContext:
 
     def _start_record(self) -> dict[str, Any]:
         text_llm = self.profiles["llm"]
+        image_profile = None
+        image_llm = "NOT_APPLICABLE"
+        native_provider_key = ""
+        native_provider = ""
+        if self.args.system == "dify_local":
+            native_provider_key = "DIFY_DEEPSEEK_LLM_PROVIDER"
+            native_provider = value_from(self.env, native_provider_key)
         provider = {
             "model_egress": "external",
-            "policy": "no_taas",
+            "policy": "deepseek_text_maas_embedding",
             "llm": f"{text_llm.name}/{text_llm.model}",
             "text_llm_provider": text_llm.name,
             "text_llm_model": text_llm.model,
-            "image_llm": f"qianfan/{self.profiles['qianfan'].image_model}",
+            "image_llm": image_llm,
+            "image_model_status": "selected" if image_profile else "NOT_APPLICABLE",
+            "image_question_count": self.package.image_question_count,
             "embedding": f"{self.profiles['maas'].name}/{self.profiles['maas'].embedding_model}/{self.profiles['maas'].embedding_dimension}",
-            "embedding_provider": (
-                "local"
-                if self.args.system == "maxkb_local"
-                and value_from(self.env, "MAXKB_EMBEDDING_PROVIDER").casefold() == "local"
-                else self.profiles["maas"].name
-            ),
-            "qianfan": self.profiles["qianfan"].public(),
+            "embedding_provider": self.profiles["maas"].name,
+            "text_llm": text_llm.public(),
             "maas": self.profiles["maas"].public(),
+            "vision": self.profiles["vision"].public(),
+            "thinking": dict(THINKING_CONFIG),
+            "native_llm_provider": (
+                native_provider or "NOT_CONFIGURED"
+                if native_provider_key
+                else "platform_selected_profile"
+            ),
+            "native_llm_provider_env": native_provider_key or "N/A",
+            "native_llm_provider_status": (
+                "configured" if native_provider else "required"
+                if native_provider_key else "not_applicable"
+            ),
             "keys_loaded": {
-                "qianfan": bool(self.profiles["qianfan"].api_key),
+                "deepseek": bool(text_llm.api_key),
                 "maas": bool(self.profiles["maas"].api_key),
             },
             "taas_used": False,
@@ -1913,12 +2199,52 @@ class RunnerContext:
             "reranker": str(self.package.manifest.get("reranker", "disabled")),
             "generator": provider["llm"],
             "image_generator": provider["image_llm"],
+            "thinking": dict(THINKING_CONFIG),
             "judge": "N/A",
-            "prompt_hash": str(self.package.manifest.get("prompt_hash", "UNKNOWN")),
+            "prompt_text": SHARED_PROMPT_TEXT,
+            "prompt_version": SHARED_PROMPT_VERSION,
+            "prompt_hash": SHARED_PROMPT_HASH,
             "top_k": list(DEFAULT_TOP_K),
             "context_budget": str(self.package.manifest.get("context_budget", "platform_default")),
-            "max_output_tokens": int(self.package.manifest.get("max_output_tokens", 0) or 0),
+            "max_output_tokens": int(self.package.manifest.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS) or DEFAULT_MAX_OUTPUT_TOKENS),
+            "prompt_contract": {
+                "version": SHARED_PROMPT_VERSION,
+                "hash": SHARED_PROMPT_HASH,
+                "text": SHARED_PROMPT_TEXT,
+                "status": {
+                    "moi_local": "propagated:cli_native_system_prompt",
+                    "dify_local": "propagated:dify_native_pre_prompt",
+                    "fastgpt_local": "propagated:isolated_app_system_prompt",
+                    "maxkb_local": "propagated:external_deepseek_generation",
+                }.get(self.args.system, "unsupported"),
+            },
         }
+        if self.args.system == "moi_local":
+            moi_resources = {
+                key: {
+                    "config": str(value.get("config", "moi/config.json")),
+                    "database": value.get("database"),
+                    "vector_table": value.get("vector_table"),
+                }
+                for key, value in self._moi_artifacts.items()
+            }
+            pipeline["moi"] = {
+                "adapter": "deterministic_fixture" if self.args.dry_run else "cli_native",
+                "resources": moi_resources,
+                "embedding": provider["embedding"],
+                "generation": provider["llm"],
+                "thinking": dict(THINKING_CONFIG),
+                "include_page_images": False,
+                "isolation": "unique MatrixOne database and vector table per run/resource",
+            }
+        elif self.args.system == "maxkb_local":
+            pipeline["maxkb"] = {
+                "retrieval_contract": "diagnostic_admin_contract",
+                "qa_contract": "external_generation_from_maxkb_retrieval",
+                "comparability": MAXKB_QA_COMPARABILITY,
+                "native_thinking_disable": "UNPROVEN_MAXKB_2_10_4",
+                "thinking": dict(THINKING_CONFIG),
+            }
         timeout = {
             "service_readiness": float(self.args.service_timeout),
             "provider_probe": float(self.args.provider_timeout),
@@ -2044,6 +2370,93 @@ class RunnerContext:
                 "network_performed": False,
             },
         }
+
+    def _materialize_moi_artifacts(self) -> None:
+        """Materialize a public-safe, isolated MOI config and canonical inputs."""
+
+        if self.args.system != "moi_local":
+            return
+        moi_root = self.root / "moi"
+        moi_root.mkdir(parents=True, exist_ok=True)
+        (moi_root / ".gitignore").write_text("*.private.json\ncli-*.json\n", encoding="utf-8")
+        embedding = self.profiles["maas"]
+        generation = self.profiles["llm"]
+        dsn = (
+            value_from(self.env, "MOI_MATRIXONE_DSN", "MATRIXONE_DSN", "MOI_DSN")
+            or "<set MOI_MATRIXONE_DSN>"
+        )
+        public_config = {
+            "matrixone": {
+                "dsn": "<set MOI_MATRIXONE_DSN>",
+                "database": "",
+                "vector_table": "",
+            },
+            "workspace_id": "",
+            "matrixflow_root": value_from(self.env, "MOI_MATRIXFLOW_ROOT", default="../../../../matrixflow"),
+            "chunk_size": 512,
+            "chunk_overlap": 64,
+            "section_size": 5,
+            # MaaS embedding is remote; keep retrieval and QA serial for
+            # benchmark comparability while allowing the ingest pipeline to
+            # use the documented bounded parallelism for this provider.
+            "embedding_batch_size": 64,
+            "embedding_concurrency": 4,
+            "embedding": {
+                "api_key_env": "MAAS_API_KEY",
+                "base_url": embedding.base_url,
+                "dimension": embedding.embedding_dimension,
+                "mode": "maas",
+                "model": embedding.embedding_model,
+            },
+            "generation": {
+                "enabled": True,
+                "provider": generation.name,
+                "base_url": generation.base_url,
+                "model": generation.model,
+                "api_key_env": generation.api_key_env,
+                "thinking": str(THINKING_CONFIG.get("type", "disabled")),
+                "include_page_images": False,
+                "max_context_bytes": 100000,
+                "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+                "system_prompt": SHARED_PROMPT_TEXT,
+                "prompt_version": SHARED_PROMPT_VERSION,
+                "prompt_hash": SHARED_PROMPT_HASH,
+                "prompt_status": "propagated:cli_native_system_prompt",
+            },
+        }
+        for key, candidates in self.package.target_documents():
+            resource_identifier = _moi_identifier(f"{self.args.run_id}_{key}")
+            config_name = "config.json" if key == GLOBAL_RESOURCE else f"config-{_safe_name(key, 60)}.json"
+            config_path = moi_root / config_name
+            config_payload = deepcopy(public_config)
+            config_payload["workspace_id"] = f"competitor-eval-{resource_identifier}"
+            config_payload["matrixone"]["database"] = f"moi_eval_{resource_identifier}"
+            config_payload["matrixone"]["vector_table"] = f"embedding_results_{resource_identifier}"
+            json_dump(config_path, config_payload)
+            private_config_path: Path | None = None
+            if dsn != "<set MOI_MATRIXONE_DSN>":
+                private_config_path = moi_root / config_name.replace(".json", ".private.json")
+                private_config = deepcopy(config_payload)
+                private_config["matrixone"]["dsn"] = dsn
+                _atomic_write(
+                    private_config_path,
+                    (json.dumps(private_config, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+                    mode=0o600,
+                )
+                _write_hash(private_config_path)
+            documents_path = moi_root / f"{_safe_name(key, 60)}-documents.jsonl"
+            questions_path = moi_root / f"{_safe_name(key, 60)}-questions.jsonl"
+            canonical = MoiAdapter.canonical_package_for(self.package, key, candidates)
+            _write_jsonl(documents_path, canonical["documents"])
+            _write_jsonl(questions_path, canonical["questions"])
+            self._moi_artifacts[key] = {
+                "config": str(config_path.relative_to(self.root)),
+                "private_config": str(private_config_path.relative_to(self.root)) if private_config_path else None,
+                "documents": str(documents_path.relative_to(self.root)),
+                "questions": str(questions_path.relative_to(self.root)),
+                "database": config_payload["matrixone"]["database"],
+                "vector_table": config_payload["matrixone"]["vector_table"],
+            }
 
     def _prepare_immutable_artifacts(self) -> None:
         start_path = self.root / "start-record.json"
@@ -2219,9 +2632,16 @@ class RunnerContext:
                     "COMPETITOR_EVAL_RETRY_FAILED",
                     default="0",
                 ).casefold() in {"1", "true", "yes", "on"}
+                retry_unsupported = value_from(
+                    self.env,
+                    "COMPETITOR_EVAL_RETRY_UNSUPPORTED",
+                    default="0",
+                ).casefold() in {"1", "true", "yes", "on"}
                 for row in _read_jsonl(self.terminal_path):
                     status = str(row.get("status"))
                     if retry_failed and status in {"FAILED", "TIMEOUT", "INTERRUPTED"}:
+                        continue
+                    if retry_unsupported and status == "UNSUPPORTED":
                         continue
                     if status not in TERMINAL_STATUSES:
                         continue
@@ -2280,7 +2700,91 @@ class RunnerContext:
                 self._http_clients[normalized_base_url] = self._protect_artifact_client(client)
             return client
 
+    def _dify_native_model_discovery(self) -> dict[str, Any]:
+        """Discover exact active Dify provider/model pairs; never guess IDs."""
+
+        selected_llm = self.profiles["llm"]
+        llm_provider = value_from(self.env, "DIFY_DEEPSEEK_LLM_PROVIDER")
+        embedding_provider = value_from(self.env, "DIFY_MAAS_EMBEDDING_PROVIDER")
+        dataset_key = value_from(self.env, "DIFY_LOCAL_DATASET_API_KEY", "DIFY_DATASET_API_KEY")
+        result: dict[str, Any] = {
+            "status": "BLOCKED",
+            "ready": False,
+            "selected": {
+                "llm": {"provider": llm_provider or "NOT_CONFIGURED", "model": selected_llm.model},
+                "embedding": {
+                    "provider": embedding_provider or "NOT_CONFIGURED",
+                    "model": self.profiles["maas"].embedding_model,
+                },
+            },
+        }
+        if not llm_provider or not embedding_provider:
+            result["error"] = "DIFY_HYBRID_NATIVE_PROVIDER_SELECTION_MISSING"
+            return result
+        if not dataset_key:
+            result["error"] = "DIFY_NATIVE_MODEL_DISCOVERY_DATASET_KEY_MISSING"
+            return result
+
+        def active_model(payload: Any, provider_name: str, model_name: str) -> dict[str, Any] | None:
+            for provider_item in list_items(payload, ("data",)):
+                if not isinstance(provider_item, Mapping):
+                    continue
+                discovered_provider = str(provider_item.get("provider") or provider_item.get("provider_name") or "")
+                if discovered_provider != provider_name:
+                    continue
+                for model_item in list_items(provider_item.get("models", [])):
+                    if not isinstance(model_item, Mapping):
+                        continue
+                    discovered_model = str(
+                        model_item.get("model")
+                        or model_item.get("model_name")
+                        or model_item.get("name")
+                        or ""
+                    )
+                    if discovered_model == model_name:
+                        return {"provider": discovered_provider, "model": discovered_model, "active": True}
+            return None
+
+        try:
+            client = self._http(self.platform_base_url())
+            llm_payload = client.request(
+                "GET",
+                "/workspaces/current/models/model-types/llm",
+                api_key=dataset_key,
+                operation="dify-native-llm-discovery",
+                timeout=self.args.provider_timeout,
+            )
+            embedding_payload = client.request(
+                "GET",
+                "/workspaces/current/models/model-types/text-embedding",
+                api_key=dataset_key,
+                operation="dify-native-embedding-discovery",
+                timeout=self.args.provider_timeout,
+            )
+            llm = active_model(llm_payload, llm_provider, selected_llm.model)
+            embedding = active_model(
+                embedding_payload,
+                embedding_provider,
+                self.profiles["maas"].embedding_model,
+            )
+            result["llm"] = llm or {"provider": llm_provider, "model": selected_llm.model, "active": False}
+            result["embedding"] = embedding or {
+                "provider": embedding_provider,
+                "model": self.profiles["maas"].embedding_model,
+                "active": False,
+            }
+            if llm is None or embedding is None:
+                result["error"] = "DIFY_NATIVE_SELECTED_MODEL_NOT_ACTIVE"
+                return result
+            result.update({"status": "READY", "ready": True})
+            return result
+        except Exception as exc:
+            result["error"] = _error_text(exc)
+            return result
+
     def platform_base_url(self) -> str:
+        if self.args.system == "moi_local":
+            return value_from(self.env, "MOI_BASE_URL", "MOI_API_URL", default="").rstrip("/")
         if self.args.system == "dify_local":
             return value_from(self.env, "DIFY_API_BASE_URL", default="http://127.0.0.1:8010/v1")
         if self.args.system == "fastgpt_local":
@@ -2354,6 +2858,7 @@ class RunnerContext:
                         "stream": False,
                         "temperature": 0,
                         "max_tokens": PROVIDER_CHAT_PROBE_MAX_TOKENS,
+                        "thinking": dict(THINKING_CONFIG),
                     },
                     operation=f"{operation_prefix}-chat",
                     timeout=self.args.provider_timeout,
@@ -2369,93 +2874,58 @@ class RunnerContext:
 
         result: dict[str, Any] = {
             "schema": "competitor-eval-provider-probe-v1",
-            "policy": "no_taas",
+            "policy": "deepseek_text_maas_embedding",
+            "thinking": dict(THINKING_CONFIG),
             "network_performed": False,
             "required": {
                 "text_llm": self.profiles["llm"].name,
-                "embedding": (
-                    "local"
-                    if self.args.system == "maxkb_local"
-                    and value_from(self.env, "MAXKB_EMBEDDING_PROVIDER").casefold() == "local"
-                    else self.profiles["maas"].name
-                ),
+                "embedding": self.profiles["maas"].name,
                 "image_model": self.package.image_question_count > 0,
             },
             "providers": {name: profile.public() for name, profile in self.profiles.items()},
-            "embedding_provider": (
-                "local"
-                if self.args.system == "maxkb_local"
-                and value_from(self.env, "MAXKB_EMBEDDING_PROVIDER").casefold() == "local"
-                else self.profiles["maas"].name
-            ),
+            "embedding_provider": self.profiles["maas"].name,
             "results": {},
         }
+        native_provider_required = self.args.system == "dify_local"
+        native_provider_key = "DIFY_DEEPSEEK_LLM_PROVIDER" if native_provider_required else ""
+        native_provider = value_from(self.env, native_provider_key) if native_provider_key else ""
+        result["required"]["native_llm_provider"] = native_provider_key or "platform_selected_profile"
+        result["native_llm_provider"] = native_provider or "NOT_CONFIGURED"
         if self.args.dry_run:
+            if native_provider_required:
+                result["native_model_discovery"] = {"status": "SKIPPED", "ready": False, "reason": "DRY_RUN"}
             result["status"] = "SKIPPED"
             result["reason"] = "DRY_RUN"
             json_dump(self.root / "providers" / "probe.json", result)
             return result
-        qianfan = self.profiles["qianfan"]
+        if native_provider_required and not native_provider:
+            result["results"]["native_llm"] = {
+                "status": "BLOCKED",
+                "ready": False,
+                "error": "DIFY_DEEPSEEK_LLM_PROVIDER_MISSING",
+                "provider": "NOT_CONFIGURED",
+            }
+            result["status"] = "BLOCKED"
+            result["ready"] = False
+            json_dump(self.root / "providers" / "probe.json", result)
+            return result
+        if native_provider_required:
+            discovery = self._dify_native_model_discovery()
+            result["native_model_discovery"] = discovery
+            if not discovery.get("ready"):
+                result["status"] = "BLOCKED"
+                result["ready"] = False
+                json_dump(self.root / "providers" / "probe.json", result)
+                return result
         maas = self.profiles["maas"]
         text_llm = self.profiles["llm"]
         result["network_performed"] = True
-        q_result = probe_chat_profile(
-            qianfan,
-            operation_prefix="provider-qianfan",
-            required=text_llm.name == "qianfan" or result["required"]["image_model"],
-        )
-        if result["required"]["image_model"] and qianfan.api_key:
-            try:
-                client = self._http(qianfan.base_url)
-                image_payload = request_with_rate_limit_retry(
-                    client,
-                    "POST",
-                    "/chat/completions",
-                    api_key=qianfan.api_key,
-                    json_body={
-                        "model": qianfan.image_model,
-                        "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-                        "stream": False,
-                        "temperature": 0,
-                        "max_tokens": PROVIDER_CHAT_PROBE_MAX_TOKENS,
-                    },
-                    operation="provider-qianfan-image-chat",
-                    timeout=self.args.provider_timeout,
-                )
-                q_result["image_chat_non_empty"] = bool(answer_from(image_payload).strip())
-                q_result["models"]["image_model_available"] = True
-            except Exception as exc:
-                q_result["image_error"] = _error_text(exc)
-            q_result["ready"] = bool(
-                q_result.get("ready")
-                and q_result.get("image_chat_non_empty")
-            )
-        result["results"]["qianfan"] = q_result
 
-        # MaxKB can use an embedding model installed inside its container. In
-        # that explicit mode there is no external embedding endpoint to probe;
-        # the adapter binds the supplied model id while creating the knowledge
-        # base. Record the choice instead of falsely requiring MaaS health.
-        local_maxkb_embedding = (
-            self.args.system == "maxkb_local"
-            and value_from(self.env, "MAXKB_EMBEDDING_PROVIDER").casefold() == "local"
-            and bool(value_from(self.env, "MAXKB_EMBEDDING_MODEL_ID"))
-        )
         m_result: dict[str, Any] = {
-            "provider": (
-                {
-                    "name": "local",
-                    "model_id": value_from(self.env, "MAXKB_EMBEDDING_MODEL_ID"),
-                    "api_key_loaded": False,
-                }
-                if local_maxkb_embedding
-                else maas.public()
-            ),
-            "ready": local_maxkb_embedding,
+            "provider": maas.public(),
+            "ready": False,
         }
-        if local_maxkb_embedding:
-            m_result.update({"status": "SKIPPED", "reason": "MAXKB_CONTAINER_LOCAL_EMBEDDING"})
-        elif not maas.api_key:
+        if not maas.api_key:
             m_result["error"] = "MAAS_API_KEY_MISSING"
         else:
             try:
@@ -2468,8 +2938,6 @@ class RunnerContext:
                         if isinstance(item, dict) and item.get("id")
                     }
                     m_result["model_available"] = maas.embedding_model in model_ids if model_ids else None
-                    if text_llm.name == "maas":
-                        m_result["llm_model_available"] = text_llm.model in model_ids if model_ids else None
                 except Exception as exc:
                     m_result["models_error"] = _error_text(exc)
                 embedding_payload = request_with_rate_limit_retry(
@@ -2485,37 +2953,26 @@ class RunnerContext:
                 vector = vectors[0].get("embedding") if vectors and isinstance(vectors[0], dict) else first_value(embedding_payload, ("embedding",))
                 dimension = len(vector) if isinstance(vector, list) else None
                 m_result["embedding_dimension"] = dimension
-                m_result["ready"] = dimension == maas.embedding_dimension and m_result.get("model_available", True) is not False
-                if text_llm.name == "maas":
-                    chat_payload = request_with_rate_limit_retry(
-                        client,
-                        "POST",
-                        "/chat/completions",
-                        api_key=text_llm.api_key,
-                        json_body={
-                            "model": text_llm.model,
-                            "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-                            "stream": False,
-                            "temperature": 0,
-                            "max_tokens": PROVIDER_CHAT_PROBE_MAX_TOKENS,
-                        },
-                        operation="provider-maas-chat",
-                        timeout=self.args.provider_timeout,
-                    )
-                    m_result["chat_non_empty"] = bool(answer_from(chat_payload).strip())
-                    m_result["ready"] = bool(
-                        m_result["ready"]
-                        and m_result["chat_non_empty"]
-                        and m_result.get("llm_model_available", True) is not False
-                    )
+                # MaaS model listings are useful diagnostics but are not a
+                # complete capability registry for every account/region. The
+                # direct embedding call below is authoritative for the frozen
+                # embedding model. Text generation is probed independently on
+                # the DeepSeek endpoint.
+                m_result["ready"] = dimension == maas.embedding_dimension
             except Exception as exc:
                 m_result["error"] = _error_text(exc)
         result["results"]["maas"] = m_result
+        text_result = probe_chat_profile(
+            text_llm,
+            operation_prefix="provider-deepseek",
+            required=True,
+        )
+        result["results"]["text_llm"] = text_result
         result["selected_text_llm"] = text_llm.public()
-        qianfan_required = text_llm.name == "qianfan" or result["required"]["image_model"]
         result["ready"] = bool(
-            (not qianfan_required or q_result.get("ready"))
-            and m_result.get("ready")
+            m_result.get("ready")
+            and text_result.get("ready")
+            and (not native_provider_required or result.get("native_model_discovery", {}).get("ready"))
         )
         result["status"] = "READY" if result["ready"] else "BLOCKED"
         json_dump(self.root / "providers" / "probe.json", result)
@@ -2537,6 +2994,21 @@ class RunnerContext:
         if self.args.dry_run:
             result.update({"status": "SKIPPED", "reason": "DRY_RUN"})
             return result
+        if self.args.system == "moi_local":
+            command = value_from(self.env, "MOI_RUNNER_COMMAND")
+            dsn = value_from(self.env, "MOI_MATRIXONE_DSN", "MATRIXONE_DSN", "MOI_DSN")
+            if _enabled(value_from(self.env, "MOI_EVAL_FIXTURE")):
+                result.update({"ready": True, "status": "FIXTURE", "adapter": "deterministic_fixture", "network_performed": False})
+                return result
+            if command and dsn:
+                result.update({"ready": True, "status": "CLI_CONFIGURED", "adapter": "cli", "network_performed": False})
+                return result
+            result.update({
+                "status": "BLOCKED",
+                "error": "MOI_RUNNER_COMMAND_AND_MATRIXONE_DSN_REQUIRED",
+                "action": "Set MOI_RUNNER_COMMAND and MOI_MATRIXONE_DSN, or use --dry-run/MOI_EVAL_FIXTURE=1.",
+            })
+            return result
         result["network_performed"] = True
         deadline = time.monotonic() + float(self.args.service_timeout)
         attempts = 0
@@ -2545,7 +3017,9 @@ class RunnerContext:
             attempts += 1
             remaining = max(1.0, deadline - time.monotonic())
             try:
-                if self.args.system == "dify_local":
+                if self.args.system == "moi_local":
+                    payload = self._http().request("GET", "/health", operation="service-readiness", timeout=remaining)
+                elif self.args.system == "dify_local":
                     client = self._root_http(self.platform_base_url())
                     payload = client.request("GET", "/console/api/setup", operation="service-readiness", timeout=remaining)
                 elif self.args.system == "fastgpt_local":
@@ -2589,6 +3063,8 @@ class RunnerContext:
         return self._preflight_cache
 
     def adapter(self) -> "BaseAdapter":
+        if self.args.system == "moi_local":
+            return MoiAdapter(self)
         if self.args.system == "dify_local":
             return DifyAdapter(self)
         if self.args.system == "fastgpt_local":
@@ -2721,14 +3197,15 @@ class RunnerContext:
                 contract = str(operation.get("contract", "public_direct_retrieval")) if isinstance(operation, dict) else "public_direct_retrieval"
                 scores = _retrieval_metrics(question, hits, int(self.args.top_k))
                 if contract == "diagnostic_admin_contract":
-                    status = "UNSUPPORTED"
+                    # MaxKB 2.10.4 exposes admin hit_test as its supported
+                    # retrieval surface; it is diagnostic rather than public,
+                    # but the returned hits are still evaluable evidence.
+                    status = "SUCCESS" if hits else "EMPTY"
                     fields = {
-                        "error": "PUBLIC_DIRECT_RETRIEVAL_UNSUPPORTED",
                         "retrieval_contract": contract,
-                        "diagnostic_status": "SUCCESS" if hits else "EMPTY",
-                        "diagnostic_hits": hits,
-                        "metric_status": "UNSUPPORTED",
-                        "diagnostic_metrics": scores,
+                        "hits": hits,
+                        "hit_count": len(hits),
+                        "metrics": scores,
                         "latency_ms": round(latency, 3),
                         "resource_key": key,
                     }
@@ -2901,16 +3378,18 @@ class RunnerContext:
                 values = [
                     float(row.get("metrics", {}).get("evidence_recall", 0.0))
                     for row in valid_rows
-                    if row.get("retrieval_contract") == "public_direct_retrieval" and row.get("metrics", {}).get("evidence_recall") is not None
+                    if row.get("retrieval_contract") in {"public_direct_retrieval", "diagnostic_admin_contract"}
+                    and row.get("metrics", {}).get("evidence_recall") is not None
                 ]
                 metric[f"evidence_recall_at_{cutoff}"] = sum(values) / len(values) if values else None
             reciprocal = [
                 float(row.get("metrics", {}).get("mrr", 0.0))
                 for row in valid_rows
-                if row.get("retrieval_contract") == "public_direct_retrieval" and row.get("metrics", {}).get("mrr") is not None
+                if row.get("retrieval_contract") in {"public_direct_retrieval", "diagnostic_admin_contract"}
+                and row.get("metrics", {}).get("mrr") is not None
             ]
             metric["mrr"] = sum(reciprocal) / len(reciprocal) if reciprocal else None
-            metric["public_retrieval_contract"] = "UNSUPPORTED:diagnostic_admin_contract" if self.args.system == "maxkb_local" else "public_direct_retrieval"
+            metric["public_retrieval_contract"] = "diagnostic_admin_contract" if self.args.system == "maxkb_local" else "public_direct_retrieval"
         else:
             answer_values = [row.get("answer_metrics", {}) for row in valid_rows]
             metric["answer_non_empty_rate"] = sum(bool(value.get("answer_non_empty")) for value in answer_values) / planned if planned else None
@@ -2921,6 +3400,11 @@ class RunnerContext:
             metric["token_f1"] = sum(f1_values) / planned if planned and f1_values else None
             metric["tdas"] = None
             metric["tdas_reason"] = "NO_FROZEN_JUDGE"
+            if self.args.system == "maxkb_local":
+                metric["qa_contract"] = MAXKB_EXTERNAL_QA_CONTRACT
+                metric["comparability"] = MAXKB_QA_COMPARABILITY
+            else:
+                metric["qa_contract"] = "native_chat"
         return metric
 
     def run(self) -> dict[str, Any]:
@@ -3117,6 +3601,359 @@ class BaseAdapter:
         return content
 
 
+class MoiAdapter(BaseAdapter):
+    """Deterministic adapter for the canonical MOI evaluation package.
+
+    The local MOI service is an external dependency and does not have a
+    stable native API in this runner yet.  Dry-runs and an explicit
+    ``MOI_EVAL_FIXTURE=1`` therefore use the package itself as a deterministic
+    retrieval/QA fixture.  A live run without that opt-in records a blocked
+    resource instead of scanning source directories or fabricating a result.
+    """
+
+    def __init__(self, context: RunnerContext):
+        self.context = context
+        self.args = context.args
+        self.package = context.package
+        self.env = context.env
+        self.client = None
+        self.contract = context.contract
+        self.reuse_configured_resource = False
+        # A fixture is an artifact-only dry-run aid.  Non-dry-run fixture use
+        # is rejected by RunnerContext before an adapter can be constructed.
+        self.fixture_enabled = bool(self.args.dry_run)
+
+    @staticmethod
+    def canonical_question(question: Question, *, source_dataset: str) -> dict[str, Any]:
+        raw = dict(question.raw)
+        relevant_documents = list(question.document_ids)
+        if not relevant_documents:
+            for key in ("gold_doc_ids", "relevant_documents", "document_ids"):
+                value = raw.get(key)
+                if isinstance(value, str):
+                    value = [value]
+                if isinstance(value, list):
+                    relevant_documents = [str(item) for item in value if item]
+                    if relevant_documents:
+                        break
+        evidence_value = raw.get("gold_evidence", raw.get("evidence", []))
+        if isinstance(evidence_value, str):
+            evidence_value = [evidence_value]
+        evidence: list[str] = []
+        if isinstance(evidence_value, list):
+            for item in evidence_value:
+                if isinstance(item, Mapping):
+                    value = item.get("evidence") or item.get("text") or item.get("quote")
+                    if value:
+                        evidence.append(str(value))
+                elif item:
+                    evidence.append(str(item))
+        return {
+            "id": question.question_id,
+            "question": question.text,
+            "relevant_documents": relevant_documents,
+            "relevant_evidence": evidence,
+            "reference_answer": question.answer,
+            "source_dataset": raw.get("source_dataset", source_dataset),
+            "question_type": raw.get("question_type"),
+            "answerability": raw.get("answerability", raw.get("answerable")),
+        }
+
+    @staticmethod
+    def canonical_document(document: Document) -> dict[str, Any]:
+        content = document.content
+        candidate_paths = [document.artifact_path, document.package_path]
+        if content is None:
+            for candidate in candidate_paths:
+                if candidate is not None and candidate.is_file():
+                    content = candidate.read_text(encoding="utf-8", errors="replace")
+                    break
+        metadata = dict(document.raw.get("metadata", {})) if isinstance(document.raw.get("metadata"), Mapping) else {}
+        # MatrixFlow's production parsed-document expansion carries source
+        # identity through metadata.file_id.  Keep the public benchmark ID as
+        # that identity so the Go product ingest path can preserve source
+        # attribution without depending on a private path or source record.
+        metadata.setdefault("file_id", document.document_id)
+        metadata.setdefault("file_name", document.document_id)
+        return {
+            "id": document.document_id,
+            "scope_id": document.scope_id,
+            "media": list(document.media),
+            "content": content or "",
+            "sha256": document.source_hash,
+            "metadata": metadata,
+        }
+
+    @staticmethod
+    def canonical_package_for(package: EvalPackage, key: str, documents: list[Document]) -> dict[str, Any]:
+        questions = [
+            MoiAdapter.canonical_question(question, source_dataset=package.dataset)
+            for question in package.questions
+            if package.scope == "global" or key in question.scope_ids
+        ]
+        return {
+            "schema": PACKAGE_SCHEMA,
+            "dataset": package.dataset,
+            "revision": package.revision,
+            "condition": package.condition,
+            "scope": package.scope,
+            "resource_key": key,
+            "documents": [MoiAdapter.canonical_document(document) for document in documents],
+            "questions": questions,
+        }
+
+    def canonical_package(self, key: str, documents: list[Document]) -> dict[str, Any]:
+        return self.canonical_package_for(self.package, key, documents)
+
+    def _fixture_resource(self, key: str, candidates: list[Document]) -> dict[str, Any]:
+        package = self.canonical_package(key, candidates)
+        return {
+            "status": "ready",
+            "ready": True,
+            "resource_key": key,
+            "resource_id": f"moi-fixture:{self.args.run_id}:{_safe_name(key)}",
+            "contract": "moi_canonical_package_fixture",
+            "ingest_representation": "canonical_package",
+            "canonical_package": package,
+            "documents": {
+                document.document_id: {
+                    "status": "ready",
+                    "resource_id": document.document_id,
+                    "sha256": document.source_hash,
+                }
+                for document in candidates
+            },
+            "ready_document_count": len(candidates),
+            "unsupported_document_count": 0,
+            "native_app": {
+                "status": "ready",
+                "contract": "moi_canonical_package_fixture",
+                "bound_resource_id": package["resource_key"],
+                "model": self.context.profiles["llm"].model,
+                "provider": self.context.profiles["llm"].name,
+                "thinking": dict(THINKING_CONFIG),
+            },
+        }
+
+    def _cli_command(self, stage: str, key: str, artifact: Mapping[str, Any]) -> tuple[list[str], Path]:
+        template = value_from(self.env, "MOI_RUNNER_COMMAND")
+        if not template:
+            raise ProviderUnavailable("MOI_RUNNER_COMMAND_MISSING")
+        try:
+            command = shlex.split(template)
+        except ValueError as exc:
+            raise ProviderUnavailable("MOI_RUNNER_COMMAND_INVALID") from exc
+        if not command:
+            raise ProviderUnavailable("MOI_RUNNER_COMMAND_MISSING")
+        config_path = (self.context.root / str(artifact.get("private_config") or artifact["config"])).resolve()
+        documents_path = (self.context.root / str(artifact["documents"])).resolve()
+        questions_path = (self.context.root / str(artifact["questions"])).resolve()
+        cli_run_root = self.context.root / "moi" / f"cli-output-{_safe_name(key, 60)}"
+        values = {
+            "stage": stage,
+            "config": str(config_path),
+            "documents": str(documents_path),
+            "dataset": str(questions_path),
+            "run": str(cli_run_root),
+            "package": str(self.context.root / "moi"),
+        }
+        if any("{" in token or "}" in token for token in command):
+            try:
+                command = [token.format(**values) for token in command]
+            except (KeyError, ValueError) as exc:
+                raise ProviderUnavailable("MOI_RUNNER_COMMAND_PLACEHOLDER_INVALID") from exc
+        else:
+            native_stage = "pipeline" if stage in {"all", "ingest"} else "run"
+            command.extend([native_stage, "--config", str(config_path), "--run", str(cli_run_root)])
+            if native_stage == "pipeline":
+                command.extend(["--documents", str(documents_path), "--dataset", str(questions_path)])
+            else:
+                command.extend(["--dataset", str(questions_path)])
+        return command, cli_run_root
+
+    def _run_cli(self, stage: str, key: str, artifact: Mapping[str, Any]) -> dict[str, Any]:
+        command, cli_run_root = self._cli_command(stage, key, artifact)
+        cwd = Path(value_from(self.env, "MOI_RUNNER_CWD", default=str(ROOT))).expanduser()
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=cwd,
+                env=dict(self.env),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise ProviderUnavailable(f"MOI_CLI_EXECUTION_FAILED:{type(exc).__name__}") from exc
+        result_files = sorted(cli_run_root.rglob("results.jsonl")) if cli_run_root.exists() else []
+        result_file = str(result_files[-1].relative_to(self.context.root)) if result_files else None
+        payload = {
+            "status": "READY" if completed.returncode == 0 else "BLOCKED",
+            "returncode": int(completed.returncode),
+            "command": command,
+            "result_file": result_file,
+            "stdout": redact_text(completed.stdout or "")[-4000:],
+            "stderr": redact_text(completed.stderr or "")[-4000:],
+        }
+        json_dump(
+            self.context.root / "moi" / f"cli-{_safe_name(key, 60)}-{stage}.json",
+            payload,
+        )
+        return payload
+
+    def _cli_result(self, resource: Mapping[str, Any], question: Question) -> dict[str, Any]:
+        cli = resource.get("cli")
+        result_file = cli.get("result_file") if isinstance(cli, Mapping) else None
+        if not result_file:
+            raise ProviderUnavailable("MOI_CLI_RESULT_FILE_MISSING")
+        path = (self.context.root / str(result_file)).resolve()
+        if self.context.root != path and self.context.root not in path.parents:
+            raise ProviderUnavailable("MOI_CLI_RESULT_FILE_OUTSIDE_RUN")
+        with self.context._state_lock:
+            offsets = self.context._moi_result_offsets.get(path)
+            if offsets is None:
+                offsets = {}
+                with path.open("rb") as handle:
+                    while True:
+                        offset = handle.tell()
+                        line = handle.readline()
+                        if not line:
+                            break
+                        row = json.loads(line)
+                        case = row.get("case")
+                        case_id = case.get("id") if isinstance(case, Mapping) else row.get("question_id")
+                        if case_id is not None:
+                            offsets.setdefault(str(case_id), offset)
+                self.context._moi_result_offsets[path] = offsets
+
+        requested_ids = (question.question_id, question.question_id.split("#repeat-", 1)[0])
+        for requested_id in requested_ids:
+            offset = offsets.get(requested_id)
+            if offset is None:
+                continue
+            with path.open("rb") as handle:
+                handle.seek(offset)
+                row = json.loads(handle.readline())
+            if str(row.get("status", "")).casefold() == "failed":
+                raise ProviderUnavailable(f"MOI_CLI_ATTEMPT_FAILED:{_error_text(EvalError(str(row.get('error') or 'UNKNOWN')))}")
+            return row
+        raise ProviderUnavailable(f"MOI_CLI_RESULT_NOT_FOUND:{question.question_id}")
+
+    def ingest(self) -> dict[str, Any]:
+        resources = self.context.load_resources()
+        counts: Counter[str] = Counter()
+        for key, candidates in self.package.target_documents():
+            existing = resources.setdefault("resources", {}).setdefault(key, {})
+            if self.fixture_enabled:
+                resource = {**existing, **self._fixture_resource(key, candidates)}
+                resources["resources"][key] = resource
+                counts["READY"] += 1
+            else:
+                artifact = self.context._moi_artifacts.get(key)
+                if not artifact:
+                    resource = {**existing, "status": "blocked", "ready": False, "error": "MOI_ARTIFACT_MISSING"}
+                    counts["BLOCKED"] += 1
+                    resources["resources"][key] = resource
+                    continue
+                try:
+                    cli = self._run_cli("ingest", key, artifact)
+                    if cli["returncode"] == 0:
+                        resource = {
+                            **existing,
+                            "status": "ready",
+                            "ready": True,
+                            "resource_key": key,
+                            "resource_id": f"moi-cli:{self.args.run_id}:{_safe_name(key)}",
+                            "contract": "moi_cli_native",
+                            "ingest_representation": "canonical_package",
+                            "config": artifact["config"],
+                            "database": artifact["database"],
+                            "vector_table": artifact["vector_table"],
+                            "cli": cli,
+                            "native_app": {
+                                "status": "ready",
+                                "contract": "moi_cli_native",
+                                "model": self.context.profiles["llm"].model,
+                                "provider": self.context.profiles["llm"].name,
+                                "thinking": dict(THINKING_CONFIG),
+                            },
+                        }
+                        counts["READY"] += 1
+                    else:
+                        resource = {**existing, "status": "blocked", "ready": False, "error": "MOI_CLI_FAILED", "cli": cli}
+                        counts["BLOCKED"] += 1
+                except Exception as exc:
+                    resource = {**existing, "status": "blocked", "ready": False, "error": _error_text(exc), "contract": "moi_cli_native"}
+                    counts["BLOCKED"] += 1
+                resources["resources"][key] = resource
+        resources["updated_at"] = utc_now()
+        self.context.save_resources(resources)
+        return {
+            "status": "SUCCESS" if counts and not counts.get("BLOCKED") else "BLOCKED",
+            "resource_counts": dict(counts),
+            "canonical_package": self.fixture_enabled,
+        }
+
+    def retrieve(self, question: Question, resource: dict[str, Any]) -> dict[str, Any]:
+        self._supported("retrieval", question.media)
+        if not self.fixture_enabled:
+            row = self._cli_result(resource, question)
+            chunks = row.get("chunks", [])
+            hits = [
+                {
+                    "document_id": item.get("file_id") or item.get("document_id"),
+                    "content": item.get("content", ""),
+                    "score": item.get("score"),
+                    "source": "moi_cli_native",
+                }
+                for item in chunks
+                if isinstance(item, Mapping)
+            ]
+            return {
+                "contract": "moi_cli_native",
+                "hits": hits[: int(self.args.top_k)],
+                "payload": row,
+            }
+        package = resource.get("canonical_package", {})
+        documents = package.get("documents", []) if isinstance(package, Mapping) else []
+        wanted = set(question.document_ids)
+        hits = [
+            {
+                "document_id": item.get("id"),
+                "content": item.get("content", ""),
+                "score": 1.0,
+                "source": "moi_canonical_package_fixture",
+            }
+            for item in documents
+            if isinstance(item, Mapping) and (not wanted or str(item.get("id")) in wanted)
+        ]
+        return {
+            "contract": "moi_canonical_package_fixture",
+            "hits": hits[: int(self.args.top_k)],
+            "payload": {"question": self.canonical_question(question, source_dataset=self.package.dataset)},
+        }
+
+    def qa(self, question: Question, resource: dict[str, Any]) -> dict[str, Any]:
+        self._supported("native_qa", question.media)
+        if not self.fixture_enabled:
+            row = self._cli_result(resource, question)
+            return {
+                "contract": "moi_cli_native",
+                "answer": str(row.get("answer", "")),
+                "generation_provider": str(row.get("generation_provider") or self.context.profiles["llm"].name),
+                "generation_model": str(row.get("generation_model") or self.context.profiles["llm"].model),
+                "thinking": dict(THINKING_CONFIG),
+                "payload": row,
+            }
+        return {
+            "contract": "moi_canonical_package_fixture",
+            "answer": question.answer,
+            "generation_provider": self.context.profiles["llm"].name,
+            "generation_model": self.context.profiles["llm"].model,
+            "thinking": dict(THINKING_CONFIG),
+        }
+
+
 class _StartRateLimiter:
     """Serialize request starts to respect a provider's RPS quota.
 
@@ -3146,28 +3983,25 @@ class DifyAdapter(BaseAdapter):
         self.max_indexing_scopes = _dify_max_indexing_scopes(self.args, self.env)
         self.dataset_key = value_from(self.env, "DIFY_LOCAL_DATASET_API_KEY", "DIFY_DATASET_API_KEY")
         self.configured_dataset_id = value_from(self.env, "DIFY_LOCAL_DATASET_ID", "DIFY_DATASET_ID")
-        configured_adapters = [
-            value_from(self.env, "DIFY_EMBEDDING_PROVIDER"),
-            value_from(self.env, "DIFY_MAAS_EMBEDDING_PROVIDER"),
-            value_from(self.env, "DIFY_QIANFAN_EMBEDDING_PROVIDER"),
-            value_from(self.env, "DIFY_QIANFAN_LLM_PROVIDER"),
-        ]
-        # This locally installed plugin is also a generic OpenAI-compatible
-        # transport.  Its package name contains the legacy vendor name even
-        # when each custom model credential targets Qianfan or Huawei MaaS.
-        # Admit only that exact adapter behind an explicit operator flag; all
-        # other TaaS/MatrixOrigin references remain forbidden.
+        selected_embedding_provider = value_from(self.env, "DIFY_MAAS_EMBEDDING_PROVIDER")
+        legacy_embedding_provider = value_from(self.env, "DIFY_EMBEDDING_PROVIDER")
+        if legacy_embedding_provider and legacy_embedding_provider != selected_embedding_provider:
+            raise RunnerError("DIFY_MAAS_EMBEDDING_PROVIDER_REQUIRED")
+        configured_adapters = [selected_embedding_provider]
+        llm_provider_key = "DIFY_DEEPSEEK_LLM_PROVIDER"
+        configured_adapters.append(value_from(self.env, llm_provider_key))
+        # Provider IDs are discovered from Dify's active model registry. A
+        # legacy generic/Qianfan selector is never a compatibility fallback.
         _reject_dify_adapters(
             configured_adapters,
-            allow_generic_compat=value_from(self.env, "DIFY_ALLOW_GENERIC_COMPAT_ADAPTER") == "1",
+            allow_generic_compat=False,
         )
 
     def _embedding_provider(self) -> str:
         return value_from(
             self.env,
-            "DIFY_QIANFAN_EMBEDDING_PROVIDER" if self.context.profiles["maas"].name == "qianfan" else "DIFY_MAAS_EMBEDDING_PROVIDER",
-            "DIFY_EMBEDDING_PROVIDER",
-            default=self.context.profiles["maas"].name,
+            "DIFY_MAAS_EMBEDDING_PROVIDER",
+            default="NOT_CONFIGURED",
         )
 
     def _create_dataset(self, key: str, documents: list[Document]) -> str:
@@ -3238,12 +4072,27 @@ class DifyAdapter(BaseAdapter):
             model = {}
         else:
             model = json.loads(json.dumps(model))
-        model["name"] = self.context.profiles["qianfan"].model
+        selected_llm = self.context.profiles["llm"]
+        model["name"] = selected_llm.model
         model["mode"] = "chat"
-        provider = value_from(self.env, "DIFY_QIANFAN_LLM_PROVIDER")
-        if provider:
-            model["provider"] = provider
+        provider_key = "DIFY_DEEPSEEK_LLM_PROVIDER"
+        provider = value_from(self.env, provider_key)
+        if not provider:
+            raise ProviderUnavailable("DIFY_DEEPSEEK_LLM_PROVIDER_MISSING")
+        if not provider:
+            provider = selected_llm.name
+        model["provider"] = provider
+        completion_params = model.get("completion_params")
+        if not isinstance(completion_params, dict):
+            completion_params = {}
+        # The installed Dify DeepSeek plugin validates this parameter as a
+        # boolean; the runner-level disabled-thinking contract is represented
+        # as False at Dify's native API boundary.
+        completion_params["thinking"] = False
+        completion_params["max_tokens"] = DEFAULT_MAX_OUTPUT_TOKENS
+        model["completion_params"] = completion_params
         model_config["model"] = model
+        model_config["pre_prompt"] = SHARED_PROMPT_TEXT
         self._console_request(
             binding,
             "POST",
@@ -3268,7 +4117,15 @@ class DifyAdapter(BaseAdapter):
             "app_id": app_id,
             "app_key_secret_path": secret_path,
             "bound_resource_id": dataset_id,
-            "model": self.context.profiles["qianfan"].model,
+            "model": selected_llm.model,
+            "provider": selected_llm.name,
+            "thinking": dict(THINKING_CONFIG),
+            "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+            "prompt_contract": {
+                "version": SHARED_PROMPT_VERSION,
+                "hash": SHARED_PROMPT_HASH,
+                "status": "propagated:dify_native_pre_prompt",
+            },
         }
 
     def _ensure_native_app(self, key: str, resource: dict[str, Any]) -> None:
@@ -3806,11 +4663,18 @@ class DifyAdapter(BaseAdapter):
             "POST",
             "/chat-messages",
             api_key=native_key,
-            json_body={"inputs": {}, "query": question.text, "response_mode": "blocking", "conversation_id": "", "user": f"competitor-eval-{self.args.run_id}-{_safe_name(question.question_id)}"},
+            json_body={"inputs": {}, "query": question.text, "response_mode": "blocking", "conversation_id": "", "user": f"competitor-eval-{self.args.run_id}-{_safe_name(question.question_id)}", "thinking": False},
             operation=f"dify-qa-{_safe_name(question.question_id)}",
             timeout=self.args.qa_timeout,
         )
-        return {"contract": "native_chat", "payload": payload, "answer": answer_from(payload)}
+        return {
+            "contract": "native_chat",
+            "payload": payload,
+            "answer": answer_from(payload),
+            "generation_provider": self.context.profiles["llm"].name,
+            "generation_model": self.context.profiles["llm"].model,
+            "thinking": dict(THINKING_CONFIG),
+        }
 
 
 class FastGPTAdapter(BaseAdapter):
@@ -3849,6 +4713,12 @@ class FastGPTAdapter(BaseAdapter):
             embedding_model=self.context.profiles["maas"].embedding_model,
         )
         for module in app_payload.get("modules", []):
+            if not isinstance(module, dict) or module.get("nodeId") != "isolatedAiChat":
+                continue
+            for item in module.get("inputs", []):
+                if isinstance(item, dict) and item.get("key") == "systemPrompt":
+                    item["value"] = SHARED_PROMPT_TEXT
+        for module in app_payload.get("modules", []):
             if not isinstance(module, dict):
                 continue
             for item in module.get("inputs", []):
@@ -3859,6 +4729,7 @@ class FastGPTAdapter(BaseAdapter):
                 elif item.get("key") == "datasets" and isinstance(item.get("value"), list) and item["value"]:
                     item["value"][0]["datasetId"] = dataset_id
                     item["value"][0]["vectorModel"] = {"model": self.context.profiles["maas"].embedding_model}
+        app_payload.setdefault("chatConfig", {})["thinking"] = dict(THINKING_CONFIG)
         app_payload["name"] = _bounded_unique_name(f"CompetitorEval-{self.args.run_id}-{key}", 100)
         app = self._unwrap_fastgpt(
             self.client.request(
@@ -3887,6 +4758,14 @@ class FastGPTAdapter(BaseAdapter):
             "bound_resource_id": dataset_id,
             "model": self.context.profiles["llm"].model,
             "provider": self.context.profiles["llm"].name,
+            "thinking": dict(THINKING_CONFIG),
+            "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+            "prompt_contract": {
+                "version": SHARED_PROMPT_VERSION,
+                "hash": SHARED_PROMPT_HASH,
+                "status": "propagated:isolated_app_system_prompt",
+                "max_output_tokens_status": "unsupported:platform_native_limit_not_exposed",
+            },
         }
 
     def _ensure_native_app(self, key: str, resource: dict[str, Any]) -> None:
@@ -3922,11 +4801,14 @@ class FastGPTAdapter(BaseAdapter):
         if document.artifact_path is None:
             raise EvalError(f"FASTGPT_DOCUMENT_ARTIFACT_MISSING:{document.document_id}")
         content = document.artifact_path.read_text(encoding="utf-8", errors="replace")
-        configured_limit = value_from(self.context.env, "FASTGPT_PUSH_CHUNK_MAX_CHARS", default="24000")
+        # MaaS bge-m3 rejects inputs above 8192 tokens.  The mixed-language
+        # corpus crossed that boundary even at 16k characters; use a safer
+        # ceiling while retaining the env override.
+        configured_limit = value_from(self.context.env, "FASTGPT_PUSH_CHUNK_MAX_CHARS", default="8000")
         try:
             max_chars = max(1000, int(configured_limit))
         except (TypeError, ValueError):
-            max_chars = 24000
+            max_chars = 8000
         items = _fastgpt_push_items(
             content,
             document,
@@ -4206,7 +5088,7 @@ class FastGPTAdapter(BaseAdapter):
         self._maas_qa_rate_limiter.wait_for_slot()
         payload = self._unwrap_fastgpt(self.client.request(
             "POST", "/api/v1/chat/completions", api_key=app_key,
-            json_body={"appId": app_id, "chatId": str(uuid.uuid4()), "stream": False, "detail": True, "messages": [{"role": "user", "content": self._question_message(question)}]},
+            json_body={"appId": app_id, "chatId": str(uuid.uuid4()), "stream": False, "detail": True, "thinking": dict(THINKING_CONFIG), "messages": [{"role": "user", "content": self._question_message(question)}]},
             operation=f"fastgpt-qa-{_safe_name(question.question_id)}", timeout=self.args.qa_timeout,
         ))
         return {
@@ -4215,6 +5097,7 @@ class FastGPTAdapter(BaseAdapter):
             "answer": answer_from(payload),
             "generation_provider": self.context.profiles["llm"].name,
             "generation_model": self.context.profiles["llm"].model,
+            "thinking": dict(THINKING_CONFIG),
         }
 
 
@@ -4229,9 +5112,14 @@ class MaxKBAdapter(BaseAdapter):
         self.admin_base = value_from(self.env, "MAXKB_ADMIN_BASE_URL", default="http://127.0.0.1:8090/admin/api")
         self.client = context._http(self.admin_base)
         self.configured_knowledge_id = value_from(self.env, "MAXKB_KNOWLEDGE_ID")
+        # MaaS model IDs may be explicit because MaxKB permits duplicate
+        # OpenAI records with the same provider/type/name. Never silently pick
+        # an old TaaS/Qianfan vector record when an explicit ID is available.
         self.embedding_model_id = value_from(self.env, "MAXKB_EMBEDDING_MODEL_ID")
-        self.chat_model_id = value_from(self.env, "MAXKB_CHAT_MODEL_ID")
-        self._qianfan_qa_rate_limiter = self.context._maas_qa_rate_limiter
+        self.chat_model_id = value_from(self.env, "MAXKB_LLM_MODEL_ID") or value_from(
+            self.env, "MAXKB_CHAT_MODEL_ID"
+        )
+        self._qa_rate_limiter = self.context._maas_qa_rate_limiter
         self.public_base = self._public_base_url()
         _reject_taas([self.admin_base, self.public_base])
 
@@ -4295,12 +5183,22 @@ class MaxKBAdapter(BaseAdapter):
         candidates = [
             item for item in models
             if isinstance(item, dict)
+            and str(item.get("provider") or "") == MAXKB_MAAS_PROVIDER
             and str(item.get("model_name", item.get("name", ""))).casefold() == self.context.profiles["maas"].embedding_model.casefold()
         ]
         if not candidates:
-            candidates = [item for item in models if isinstance(item, dict) and self.context.profiles["maas"].embedding_model.casefold() in str(item).casefold()]
+            candidates = [
+                item for item in models
+                if isinstance(item, dict)
+                and str(item.get("provider") or "") == MAXKB_MAAS_PROVIDER
+                and self.context.profiles["maas"].embedding_model.casefold() in str(item).casefold()
+            ]
         if not candidates:
             raise ContractUnsupported("MAXKB_MAAS_BGE_M3_MODEL_NOT_REGISTERED")
+        if len(candidates) > 1:
+            raise ContractUnsupported(
+                "MAXKB_MAAS_BGE_M3_MODEL_AMBIGUOUS_SET_MAXKB_EMBEDDING_MODEL_ID"
+            )
         model_id = self._id(candidates[0], ("id", "model_id"))
         if not model_id:
             raise EvalError("MAXKB_EMBEDDING_MODEL_ID_MISSING")
@@ -4310,17 +5208,27 @@ class MaxKBAdapter(BaseAdapter):
         if self.chat_model_id:
             return self.chat_model_id
         models = list_items(self._admin("GET", "/workspace/default/model", operation="maxkb-discover-chat-model"))
-        expected = self.context.profiles["qianfan"].model.casefold()
+        expected = self.context.profiles["llm"].model.casefold()
         candidates = [
             item
             for item in models
             if isinstance(item, dict)
+            and str(item.get("provider") or "") == MAXKB_MAAS_PROVIDER
             and str(item.get("model_name", item.get("name", ""))).casefold() == expected
         ]
         if not candidates:
-            candidates = [item for item in models if isinstance(item, dict) and expected in str(item).casefold()]
+            candidates = [
+                item for item in models
+                if isinstance(item, dict)
+                and str(item.get("provider") or "") == MAXKB_MAAS_PROVIDER
+                and expected in str(item).casefold()
+            ]
         if not candidates:
-            raise ContractUnsupported("MAXKB_QIANFAN_CHAT_MODEL_NOT_REGISTERED")
+            raise ContractUnsupported("MAXKB_SELECTED_LLM_MODEL_NOT_REGISTERED")
+        if len(candidates) > 1:
+            raise ContractUnsupported(
+                "MAXKB_SELECTED_LLM_MODEL_AMBIGUOUS_SET_MAXKB_LLM_MODEL_ID"
+            )
         model_id = self._id(candidates[0], ("id", "model_id"))
         if not model_id:
             raise EvalError("MAXKB_CHAT_MODEL_ID_MISSING")
@@ -4337,6 +5245,11 @@ class MaxKBAdapter(BaseAdapter):
         return knowledge_id
 
     def _create_native_app(self, key: str, knowledge_id: str) -> dict[str, Any]:
+        # Compatibility entry point retained for callers inspecting the old
+        # adapter shape. _ensure_native_app never invokes it for MaxKB 2.10.4.
+        raise ContractUnsupported("MAXKB_NATIVE_THINKING_DISABLE_UNPROVEN")
+
+        # Legacy native-app construction below is intentionally unreachable.
         chat_model_id = self._discover_chat_model()
         app = self._admin(
             "POST",
@@ -4363,7 +5276,7 @@ class MaxKBAdapter(BaseAdapter):
                 },
                 "problem_optimization": False,
                 "type": "SIMPLE",
-                "model_params_setting": {"temperature": 0.1, "max_tokens": 1024},
+                "model_params_setting": {"temperature": 0.1, "max_tokens": 1024, "thinking": dict(THINKING_CONFIG)},
             },
             operation=f"maxkb-create-app-{_safe_name(key)}",
             timeout=self.args.upload_timeout,
@@ -4397,17 +5310,25 @@ class MaxKBAdapter(BaseAdapter):
             "app_key_secret_path": secret_path,
             "bound_resource_id": knowledge_id,
             "chat_model_id": chat_model_id,
-            "model": self.context.profiles["qianfan"].model,
+            "model": self.context.profiles["llm"].model,
+            "provider": self.context.profiles["llm"].name,
+            "thinking": dict(THINKING_CONFIG),
         }
 
     def _ensure_native_app(self, key: str, resource: dict[str, Any]) -> None:
-        if self._native_app_resumable(resource):
-            return
-        try:
-            native = self._create_native_app(key, str(resource["knowledge_id"]))
-            resource.update({"app_id": native["app_id"], "app_key_secret_path": native["app_key_secret_path"], "native_app": native})
-        except Exception as exc:
-            self._record_native_setup_failure(resource, exc)
+        # MaxKB 2.10.4 cannot prove that nested GLM thinking settings survive
+        # its native OpenAI model form. Keep retrieval usable, but make native
+        # QA explicitly unreachable and route generation through MaaS.
+        resource["native_app"] = {
+            "status": "unsupported",
+            "contract": MAXKB_EXTERNAL_QA_CONTRACT,
+            "error": "MAXKB_NATIVE_THINKING_DISABLE_UNPROVEN",
+            "bound_resource_id": resource.get("resource_id"),
+        }
+        resource["qa_contract"] = MAXKB_EXTERNAL_QA_CONTRACT
+        resource["qa_comparability"] = MAXKB_QA_COMPARABILITY
+        resource.pop("app_id", None)
+        resource.pop("app_key_secret_path", None)
 
     def _create_document(self, knowledge_id: str, document: Document, ordinal: int) -> str:
         if document.artifact_path is None:
@@ -4703,23 +5624,69 @@ class MaxKBAdapter(BaseAdapter):
 
     def qa(self, question: Question, resource: dict[str, Any]) -> dict[str, Any]:
         self._supported("native_qa", question.media)
-        native = resource.get("native_app")
-        if not isinstance(native, Mapping) or native.get("status") != "ready":
-            reason = native.get("error") if isinstance(native, Mapping) else "MAXKB_RESOURCE_NATIVE_APP_MISSING"
-            if isinstance(native, Mapping) and native.get("status") == "unsupported":
-                raise ContractUnsupported(str(reason))
-            raise ProviderUnavailable(str(reason))
-        client, path, app_key = self._native_client_and_path(resource)
-        self._qianfan_qa_rate_limiter.wait_for_slot()
+        retrieval = self.retrieve(question, resource)
+        hits = retrieval.get("hits", [])
+        try:
+            context_chars = int(
+                value_from(
+                    self.env,
+                    "MAXKB_EXTERNAL_CONTEXT_CHARS",
+                    default=str(MAXKB_EXTERNAL_CONTEXT_CHARS),
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise RunnerError("MAXKB_EXTERNAL_CONTEXT_CHARS_INVALID") from exc
+        if context_chars < 1:
+            raise RunnerError("MAXKB_EXTERNAL_CONTEXT_CHARS_INVALID")
+        try:
+            context_chunks = int(
+                value_from(
+                    self.env,
+                    "MAXKB_EXTERNAL_MAX_CHUNKS",
+                    default=str(MAXKB_EXTERNAL_MAX_CHUNKS),
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise RunnerError("MAXKB_EXTERNAL_MAX_CHUNKS_INVALID") from exc
+        if context_chunks < 1:
+            raise RunnerError("MAXKB_EXTERNAL_MAX_CHUNKS_INVALID")
+        retrieved_context = _maxkb_external_context(
+            hits,
+            question.text,
+            max_chars=context_chars,
+            max_chunks=context_chunks,
+        )
+        prompt = f"{SHARED_PROMPT_TEXT}\n\nRetrieved context:\n{retrieved_context}\n\nQuestion: {question.text}"
+        self._qa_rate_limiter.wait_for_slot()
+        client = self.context._http(self.context.profiles["llm"].base_url, timeout=self.args.qa_timeout)
         payload = client.request(
             "POST",
-            path,
-            api_key=app_key,
-            json_body={"model": value_from(self.env, "MAXKB_LLM_MODEL", default=self.context.profiles["qianfan"].model), "stream": False, "user": f"competitor-eval-{self.context.args.run_id}-{_safe_name(question.question_id)}", "messages": [{"role": "user", "content": self._question_message(question)}]},
-            operation=f"maxkb-openai-qa-{_safe_name(question.question_id)}",
+            "/chat/completions",
+            api_key=self.context.profiles["llm"].api_key,
+            json_body={
+                "model": self.context.profiles["llm"].model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "temperature": 0,
+                "max_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+                "thinking": dict(THINKING_CONFIG),
+            },
+            operation=f"maxkb-external-maas-qa-{_safe_name(question.question_id)}",
             timeout=self.args.qa_timeout,
         )
-        return {"contract": "public_openai_compatible", "payload": payload, "answer": answer_from(payload)}
+        return {
+            "contract": MAXKB_EXTERNAL_QA_CONTRACT,
+            "comparability": MAXKB_QA_COMPARABILITY,
+            "retrieval_contract": retrieval.get("contract", "diagnostic_admin_contract"),
+            "diagnostic_hits": hits,
+            "payload": payload,
+            "answer": answer_from(payload),
+            "generation_provider": self.context.profiles["llm"].name,
+            "generation_model": self.context.profiles["llm"].model,
+            "thinking": dict(THINKING_CONFIG),
+            "prompt_version": SHARED_PROMPT_VERSION,
+            "prompt_hash": SHARED_PROMPT_HASH,
+        }
 
 
 def _write_json_map(path: Path, payload: dict[str, Any]) -> None:
@@ -4784,17 +5751,21 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="bounded concurrent FastGPT resource ingests (default 2; env FASTGPT_INGEST_CONCURRENCY)",
     )
-    parser.add_argument("--qianfan-base-url", default="")
+    parser.add_argument("--qianfan-base-url", default="", help="legacy checkpoint compatibility only; never materialized")
     parser.add_argument("--maas-base-url", default="")
+    parser.add_argument("--deepseek-base-url", default="")
     parser.add_argument(
         "--text-llm-provider",
-        choices=("qianfan", "maas"),
+        "--llm-provider",
+        choices=("qianfan", "maas", "deepseek", "deepseek-official", "dsv4f"),
         default="",
-        help="text generation provider for FastGPT native QA (default qianfan; maas requires a text-only package)",
+        help="selected text generation provider (deepseek/deepseek-official/dsv4f aliases are admitted; legacy values fail closed)",
     )
-    parser.add_argument("--qianfan-llm-model", default="")
-    parser.add_argument("--qianfan-image-llm-model", default="")
-    parser.add_argument("--maas-llm-model", default="")
+    parser.add_argument("--qianfan-llm-model", default="", help="legacy checkpoint compatibility only; never materialized")
+    parser.add_argument("--qianfan-image-llm-model", default="", help="legacy compatibility only; text-only image model is NOT_APPLICABLE")
+    parser.add_argument("--deepseek-llm-model", "--llm-model", dest="deepseek_llm_model", default="")
+    parser.add_argument("--maas-llm-model", default="", help="legacy checkpoint compatibility only; never materialized")
+    parser.add_argument("--maas-vl-model", default="", help="legacy option; derived text-only package freezes image model as NOT_APPLICABLE")
     parser.add_argument("--maas-embedding-model", default="")
     parser.add_argument("--maas-embedding-dimension", type=int, default=0)
 

@@ -20,9 +20,26 @@ import re
 import sys
 import unicodedata
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+
+from competitor_eval_metric_registry import (
+    MISSING_STRUCTURED_CLAIM_GOLD,
+    METRIC_REGISTRY,
+    REGISTRY_VERSION,
+    answerability_label,
+    gold_doc_count,
+    metric_record,
+    na_record,
+    normalize_structured_gold,
+    normalize_legacy_record,
+    normalize_text,
+    percentile as registry_percentile,
+    source_for_row,
+    structured_claim_gold_available,
+    token_f1 as registry_token_f1,
+)
 
 
 TOP_K = (1, 3, 5, 10)
@@ -30,6 +47,7 @@ UNSUPPORTED_NEEDS_JUDGE = "UNSUPPORTED_NEEDS_JUDGE"
 UNSUPPORTED_TRACE_UNAVAILABLE = "UNSUPPORTED_TRACE_UNAVAILABLE"
 UNSUPPORTED_GOLD_UNAVAILABLE = "UNSUPPORTED_GOLD_UNAVAILABLE"
 INCOMPLETE_PLANNED_DENOMINATOR = "INCOMPLETE_PLANNED_DENOMINATOR"
+INCOMPLETE_PLANNED_JUDGE_OBSERVATIONS = "INCOMPLETE_PLANNED_JUDGE_OBSERVATIONS"
 
 VALID_STATUSES = frozenset({"SUCCESS", "EMPTY"})
 FAILED_STATUSES = frozenset(
@@ -82,6 +100,9 @@ _DATASET_ALIASES = {
     "omni-doc-bench": "omnidocbench",
     "lenovo": "lenovo-bench",
     "lenovo-bench": "lenovo-bench",
+    "moi-rag-bench-v0.1-text-only-no-mllm": "moi-rag-bench-v0.1-text-only-no-mllm",
+    "moi-rag-bench-v0.1-ready-for-eval": "moi-rag-bench-v0.1-text-only-no-mllm",
+    "moi-rag-bench-v0.1-mixed": "moi-rag-bench-v0.1-text-only-no-mllm",
 }
 
 _ID_KEYS = frozenset(
@@ -331,6 +352,26 @@ def _condition_selection(manifest: Mapping[str, Any], run_condition: str) -> tup
     conditions = manifest.get("conditions")
     if not isinstance(conditions, Mapping):
         return run_condition or str(manifest.get("condition", "") or ""), dict(manifest)
+    # Some older manifests use `conditions` as free-form package metadata
+    # (for example denominator_policy), not as named condition specs.  Keep
+    # those packages on the run/manifest condition instead of treating the
+    # metadata key as an evaluation condition.
+    condition_spec_keys = {
+        "questions",
+        "questions_path",
+        "corpus",
+        "documents_path",
+        "gold",
+        "gold_path",
+        "artifacts",
+        "paths",
+    }
+    has_named_condition = any(
+        isinstance(value, Mapping) and bool(condition_spec_keys.intersection(value))
+        for value in conditions.values()
+    )
+    if not has_named_condition:
+        return run_condition or str(manifest.get("condition", "") or ""), dict(manifest)
     candidates = {str(key).casefold(): (str(key), value) for key, value in conditions.items()}
     if run_condition and run_condition.casefold() in candidates and isinstance(candidates[run_condition.casefold()][1], Mapping):
         key, value = candidates[run_condition.casefold()]
@@ -351,12 +392,75 @@ def _question_id(row: Mapping[str, Any]) -> str:
 
 def _merge_question_gold(question: dict[str, Any], gold: Mapping[str, Any] | None) -> dict[str, Any]:
     merged = dict(question)
-    if not gold:
-        return merged
-    for key, value in gold.items():
-        if key not in merged or merged[key] in (None, "", [], {}):
-            merged[key] = value
-    return merged
+    if gold:
+        for key, value in gold.items():
+            if key not in merged or merged[key] in (None, "", [], {}):
+                merged[key] = value
+    return normalize_structured_gold(merged)
+
+
+def _validate_declared_counts(
+    manifest: Mapping[str, Any],
+    actual: Mapping[str, int],
+) -> None:
+    """Reject a declared-count mismatch for a package being aggregated."""
+
+    declared = manifest.get("counts")
+    if not isinstance(declared, Mapping):
+        return
+    for key, observed in actual.items():
+        if key not in declared:
+            continue
+        value = declared[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise MetricsError(f"PACKAGE_DECLARED_COUNT_INVALID:{key}")
+        if value != observed:
+            raise MetricsError(f"PACKAGE_COUNT_MISMATCH:{key}:declared={value}:actual={observed}")
+
+
+def _validate_text_only_package(
+    manifest: Mapping[str, Any],
+    selected: Mapping[str, Any],
+    *,
+    questions: Sequence[Mapping[str, Any]],
+    corpus: Sequence[Mapping[str, Any]],
+    gold_count: int,
+) -> None:
+    """Keep unified metrics on the same pure-text admission contract."""
+
+    def value(name: str, default: Any = None) -> Any:
+        if selected.get(name) is not None:
+            return selected[name]
+        return manifest.get(name, default)
+
+    count_manifest = selected if isinstance(selected.get("counts"), Mapping) else manifest
+    _validate_declared_counts(
+        count_manifest,
+        {"documents": len(corpus), "questions": len(questions), "gold": gold_count},
+    )
+    if value("mllm_required") is not False:
+        raise MetricsError("TEXT_ONLY_MLLM_REQUIRED_MUST_BE_FALSE")
+    if str(value("image_llm", "")).strip().upper() != "NOT_APPLICABLE":
+        raise MetricsError("TEXT_ONLY_IMAGE_LLM_MUST_BE_NOT_APPLICABLE")
+    for row in corpus:
+        media_text = " ".join(
+            str(row.get(key)).casefold()
+            for key in ("media", "modality", "media_type", "mime_type")
+            if row.get(key) not in (None, "")
+        )
+        if any(marker in media_text for marker in ("image", "audio", "video")):
+            raise MetricsError("TEXT_ONLY_CORPUS_MEDIA_UNSUPPORTED")
+    for row in questions:
+        image_values = row.get("images", row.get("image_paths", row.get("image_path")))
+        if image_values not in (None, "", [], ()):
+            raise MetricsError("TEXT_ONLY_QUESTION_IMAGE_INPUT_UNSUPPORTED")
+        media_text = " ".join(
+            str(row.get(key)).casefold()
+            for key in ("media", "modality")
+            if row.get(key) not in (None, "")
+        )
+        if any(marker in media_text for marker in ("image", "audio", "video")):
+            raise MetricsError("TEXT_ONLY_QUESTION_MEDIA_UNSUPPORTED")
 
 
 def _load_package(package: str | Path, run_manifest: Mapping[str, Any]) -> PackageData:
@@ -433,6 +537,14 @@ def _load_package(package: str | Path, run_manifest: Mapping[str, Any]) -> Packa
     else:
         dataset_name = str(dataset_value)
     dataset_id = canonical_dataset_id(dataset_name)
+    if condition == "text-only-no-mllm":
+        _validate_text_only_package(
+            manifest,
+            selected,
+            questions=questions,
+            corpus=corpus,
+            gold_count=len(gold_rows),
+        )
     revision = str(
         _first(
             manifest,
@@ -725,9 +837,12 @@ def _question_map(package: PackageData, terminal_rows: Sequence[Mapping[str, Any
                 keyword_value = _first(row, keyword_key, default=_first(case, keyword_key, default=None))
                 if keyword_value is not None:
                     metadata[keyword_key] = keyword_value
-        result[qid] = {
+        result[qid] = normalize_structured_gold({
             "question_id": qid,
+            "source_dataset": _first(row, "source_dataset", "dataset", default=_first(case, "source_dataset", "dataset", default="")),
             "question_type": _question_type(row),
+            "answerability": _first(row, "answerability", default=_first(case, "answerability", default="")),
+            "answerable": _first(row, "answerable", default=_first(case, "answerable", default=True)),
             "question": _first(row, "question", default=_first(case, "question", default="")),
             "reference_answer": _first(
                 row,
@@ -752,7 +867,10 @@ def _question_map(package: PackageData, terminal_rows: Sequence[Mapping[str, Any
                 default=_first(case, "gold_evidence", "evidence", "relevant_evidence", default=[]),
             ),
             "metadata": metadata,
-        }
+            "scored_reference_claims": _first(row, "scored_reference_claims", "reference_claims", "claims", default=_first(case, "scored_reference_claims", "reference_claims", "claims", default=None)),
+            "critical_claims": _first(row, "critical_claims", "critical_required_claims", "required_claims", default=_first(case, "critical_claims", "critical_required_claims", "required_claims", default=None)),
+            "evidence_sets": _first(row, "evidence_sets", "gold_evidence_sets", "claim_evidence_sets", default=_first(case, "evidence_sets", "gold_evidence_sets", "claim_evidence_sets", default=None)),
+        })
     return result
 
 
@@ -1861,6 +1979,1631 @@ def _stage_result(stage: str, state: StageState, package: PackageData, aliases: 
     return result
 
 
+def _state_for_units(state: StageState, units: Sequence[tuple[str, int]]) -> StageState:
+    """Create a denominator-preserving view for one mixed-benchmark slice."""
+
+    selected_units = list(units)
+    selected_keys = set(selected_units)
+    rows = {key: row for key, row in state.rows.items() if key in selected_keys}
+    counts: Counter[str] = Counter(_status(row.get("status")) for row in rows.values())
+    terminal_n = sum(counts.get(value, 0) for value in counts if value not in PENDING_STATUSES)
+    valid_n = sum(counts.get(value, 0) for value in VALID_STATUSES)
+    failed_n = sum(counts.get(value, 0) for value in FAILED_STATUSES)
+    unsupported_n = sum(counts.get(value, 0) for value in UNSUPPORTED_STATUSES)
+    return StageState(
+        name=state.name,
+        units=selected_units,
+        rows=rows,
+        questions=state.questions,
+        planned_n=len(selected_units),
+        terminal_n=terminal_n,
+        valid_n=valid_n,
+        failed_n=failed_n,
+        unsupported_n=unsupported_n,
+        pending_n=max(0, len(selected_units) - terminal_n),
+        status_counts=dict(sorted(counts.items())),
+    )
+
+
+def _mixed_source_for_unit(
+    retrieval_state: StageState,
+    qa_state: StageState,
+    key: tuple[str, int],
+) -> str:
+    question = retrieval_state.questions.get(key[0], qa_state.questions.get(key[0], {}))
+    return source_for_row(retrieval_state.rows.get(key) or qa_state.rows.get(key), question)
+
+
+def _mixed_rows_for_state(state: StageState) -> list[tuple[tuple[str, int], dict[str, Any], dict[str, Any]]]:
+    result: list[tuple[tuple[str, int], dict[str, Any], dict[str, Any]]] = []
+    for key in state.units:
+        result.append((key, state.questions.get(key[0], {}), state.rows.get(key) or {}))
+    return result
+
+
+def _mixed_metric(
+    metric_id: str,
+    values: Sequence[float],
+    denominator: int,
+    *,
+    eligible_n: int,
+    missing_n: int,
+    failed_n: int,
+    na_reason: str | None = None,
+    unit: str | None = None,
+    aggregation: str = "planned_initial_denominator",
+    protocol_label: str | None = None,
+) -> dict[str, Any]:
+    numerator = sum(float(value) for value in values)
+    if denominator <= 0:
+        return na_record(metric_id, "NO_APPLICABLE_ATTEMPTS", denominator=denominator, eligible_n=eligible_n, missing_n=missing_n, failed_n=failed_n, numerator=numerator, unit=unit, aggregation=aggregation, protocol_label=protocol_label)
+    if na_reason:
+        return na_record(metric_id, na_reason, denominator=denominator, eligible_n=eligible_n, missing_n=missing_n, failed_n=failed_n, numerator=numerator, unit=unit, aggregation=aggregation, protocol_label=protocol_label)
+    if missing_n:
+        return na_record(metric_id, "INCOMPLETE_PLANNED_DENOMINATOR", denominator=denominator, eligible_n=eligible_n, missing_n=missing_n, failed_n=failed_n, numerator=numerator, unit=unit, aggregation=aggregation, protocol_label=protocol_label)
+    return metric_record(
+        metric_id,
+        value=numerator / denominator,
+        numerator=numerator,
+        denominator=denominator,
+        eligible_n=eligible_n,
+        missing_n=missing_n,
+        failed_n=failed_n,
+        unit=unit,
+        aggregation=aggregation,
+        protocol_label=protocol_label,
+    )
+
+
+def _mixed_percentile_metric(
+    metric_id: str,
+    values: Sequence[float],
+    fraction: float,
+    *,
+    planned_n: int,
+    failed_n: int,
+    na_reason: str | None = None,
+) -> dict[str, Any]:
+    if na_reason:
+        return na_record(metric_id, na_reason, denominator=planned_n, eligible_n=0, missing_n=max(0, planned_n - failed_n), failed_n=failed_n, unit="milliseconds", aggregation="not_applicable")
+    value = registry_percentile(values, fraction)
+    if value is None:
+        return na_record(metric_id, "NO_LATENCY_OBSERVATIONS", denominator=planned_n, eligible_n=0, missing_n=max(0, planned_n - failed_n), failed_n=failed_n, unit="milliseconds", aggregation="observed_terminal_latencies; nearest_rank_percentile")
+    return metric_record(
+        metric_id,
+        value=value,
+        numerator=value,
+        denominator=planned_n,
+        eligible_n=len(values),
+        missing_n=max(0, planned_n - len(values) - failed_n),
+        failed_n=failed_n,
+        unit="milliseconds",
+        aggregation="observed_terminal_latencies; nearest_rank_percentile",
+    )
+
+
+def _mixed_answer_from_row(row: Mapping[str, Any]) -> str | None:
+    answer = _answer_from_row(row)
+    return answer if answer is not None else None
+
+
+def _mixed_refusal(answer: str | None) -> bool:
+    if not answer:
+        return False
+    return bool(
+        re.search(
+            r"(?:\b(?:cannot|can't|unable|insufficient|not enough|no (?:relevant )?information|not provided|cannot determine|unknown|not found)\b|无法(?:确定|判断|回答|确认)?|不能(?:确定|判断|回答|确认)|信息不足|没有足够|未提供|无相关信息|未找到)",
+            answer,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _mixed_gold_ids(question: Mapping[str, Any]) -> list[str]:
+    return _gold_doc_ids(question)
+
+
+def _mixed_ranked_values(
+    question: Mapping[str, Any],
+    hits: Sequence[Any],
+    aliases: Mapping[str, set[str]],
+    k: int,
+) -> dict[str, Any] | None:
+    gold_ids = _mixed_gold_ids(question)
+    if not gold_ids:
+        return None
+    ordered = _ordered_hits(hits)[:k]
+    matched: set[int] = set()
+    ranks: list[int] = []
+    for rank, hit in enumerate(ordered, 1):
+        for index, gold_id in enumerate(gold_ids):
+            if index in matched:
+                continue
+            if _row_matches_gold_ids(hit, [gold_id], aliases):
+                matched.add(index)
+                ranks.append(rank)
+    recall = len(matched) / len(gold_ids)
+    hit = float(bool(matched))
+    mrr = 1.0 / min(ranks) if ranks else 0.0
+    average_precision = sum((index + 1) / rank for index, rank in enumerate(sorted(ranks))) / len(gold_ids)
+    dcg = sum(1.0 / math.log2(rank + 1) for rank in ranks)
+    ideal = sum(1.0 / math.log2(rank + 1) for rank in range(1, min(len(gold_ids), k) + 1))
+    return {
+        "recall": recall,
+        "hit": hit,
+        "precision": len(matched) / len(ordered) if ordered else 0.0,
+        "mrr": mrr,
+        "map": average_precision,
+        "ndcg": dcg / ideal if ideal else 0.0,
+        "complete": float(len(matched) == len(gold_ids)),
+        "matched": len(matched),
+        "gold_count": len(gold_ids),
+        "ranks": ranks,
+    }
+
+
+def _mixed_has_graded_qrels(question: Mapping[str, Any], hits: Sequence[Any]) -> bool:
+    for key in ("graded_qrels", "qrels", "relevance_grades", "gold_relevance"):
+        if question.get(key) not in (None, [], {}):
+            return True
+    for hit in hits:
+        for mapping in _iter_nested_mappings(hit):
+            if any(key in mapping for key in ("relevance", "relevance_grade", "grade", "qrel")):
+                return True
+    return False
+
+
+def _mixed_evidence_sets(question: Mapping[str, Any]) -> list[list[str]]:
+    raw = normalize_structured_gold(question).get("evidence_sets")
+    if raw in (None, [], {}):
+        return []
+    result: list[list[str]] = []
+    for candidate in _as_list(raw):
+        if isinstance(candidate, Mapping):
+            candidate = _first(candidate, "evidence", "items", "doc_ids", "document_ids", "ids", default=[])
+        ids = _as_ids(candidate)
+        if ids:
+            result.append(ids)
+    return result
+
+
+def _mixed_structured_complete_value(
+    question: Mapping[str, Any],
+    hits: Sequence[Any],
+    aliases: Mapping[str, set[str]],
+    k: int,
+) -> float | None:
+    evidence_sets = _mixed_evidence_sets(question)
+    if not evidence_sets:
+        return None
+    top_hits = _ordered_hits(hits)[:k]
+    return float(
+        any(
+            all(any(_row_matches_gold_ids(hit, [evidence_id], aliases) for hit in top_hits) for evidence_id in evidence_set)
+            for evidence_set in evidence_sets
+        )
+    )
+
+
+def _mixed_ndcg_value(question: Mapping[str, Any], hits: Sequence[Any], k: int) -> float | None:
+    raw_qrels: Any = None
+    for key in ("graded_qrels", "qrels", "relevance_grades", "gold_relevance"):
+        if question.get(key) not in (None, [], {}):
+            raw_qrels = question[key]
+            break
+    qrels: dict[str, float] = {}
+    if isinstance(raw_qrels, Mapping):
+        for key, value in raw_qrels.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                qrels.update({variant: float(value) for variant in _id_variants(key)})
+    elif isinstance(raw_qrels, list):
+        for item in raw_qrels:
+            if not isinstance(item, Mapping):
+                continue
+            identifier = _first(item, "document_id", "doc_id", "id", "source_id", default=None)
+            grade = _first(item, "grade", "relevance", "score", default=None)
+            if identifier is not None and isinstance(grade, (int, float)) and not isinstance(grade, bool):
+                qrels.update({variant: float(grade) for variant in _id_variants(identifier)})
+    if not qrels:
+        return None
+    gains: list[float] = []
+    for rank, hit in enumerate(_ordered_hits(hits)[:k], 1):
+        grade = max((qrels.get(identifier, 0.0) for identifier in _hit_ids(hit)), default=0.0)
+        gains.append((2.0**grade - 1.0) / math.log2(rank + 1))
+    ideal_grades = sorted(qrels.values(), reverse=True)[:k]
+    ideal = sum((2.0**grade - 1.0) / math.log2(rank + 1) for rank, grade in enumerate(ideal_grades, 1))
+    return sum(gains) / ideal if ideal else 0.0
+
+
+def _mixed_public_retrieval_supported(run_manifest: Mapping[str, Any]) -> bool:
+    declared = _first(run_manifest, "public_retrieval_supported", "direct_retrieval_supported", default=None)
+    if declared is False or str(declared).casefold() in {"false", "unsupported", "n/a", "na"}:
+        return False
+    system = str(_first(run_manifest, "system_id", "system", "platform", "runner", default="") or "").casefold()
+    return "maxkb" not in system
+
+
+def _mixed_retrieval_metrics(
+    state: StageState,
+    package: PackageData,
+    aliases: Mapping[str, set[str]],
+    *,
+    public_retrieval_supported: bool = True,
+) -> dict[str, Any]:
+    metrics: dict[str, Any] = {}
+    applicable_keys = [key for key, question, _ in _mixed_rows_for_state(state) if _mixed_gold_ids(question)]
+    failed_applicable = sum(_status(state.rows.get(key, {}).get("status")) in FAILED_STATUSES for key in applicable_keys)
+    if not public_retrieval_supported:
+        for k in TOP_K:
+            for name in (f"recall_at_{k}", f"hit_at_{k}", f"precision_at_{k}"):
+                metrics[name] = na_record(name, "UNSUPPORTED_API", denominator=len(applicable_keys) or state.planned_n, missing_n=max(0, len(applicable_keys) - failed_applicable), failed_n=failed_applicable)
+        for name in ("mrr", "map_at_10", *(f"ndcg_at_{k}" for k in TOP_K)):
+            metrics[name] = na_record(name, "UNSUPPORTED_API", denominator=len(applicable_keys) or state.planned_n, missing_n=max(0, len(applicable_keys) - failed_applicable), failed_n=failed_applicable)
+        for k in TOP_K:
+            metrics[f"complete_evidence_set_recall_at_{k}"] = na_record(
+                f"complete_evidence_set_recall_at_{k}",
+                "UNSUPPORTED_API",
+                denominator=len(applicable_keys) or state.planned_n,
+                missing_n=max(0, len(applicable_keys) - failed_applicable),
+                failed_n=failed_applicable,
+            )
+            metrics[f"adapted_complete_evidence_set_recall_at_{k}"] = metrics[f"complete_evidence_set_recall_at_{k}"]
+        metrics["invalid_extra_rate_at_10"] = na_record("invalid_extra_rate_at_10", "UNSUPPORTED_API", denominator=state.planned_n, missing_n=max(0, state.planned_n - failed_applicable), failed_n=failed_applicable)
+        metrics["invalid_extra_docs_at_10"] = metrics["invalid_extra_rate_at_10"]
+        return metrics
+
+    for k in TOP_K:
+        recall_values: list[float] = []
+        hit_values: list[float] = []
+        precision_values: list[float] = []
+        complete_values: list[float] = []
+        structured_complete_values: list[float] = []
+        eligible = 0
+        missing = 0
+        structured_keys = [key for key in applicable_keys if _mixed_evidence_sets(state.questions.get(key[0], {}))]
+        structured_failed = sum(_status(state.rows.get(key, {}).get("status")) in FAILED_STATUSES for key in structured_keys)
+        structured_missing = 0
+        for key in applicable_keys:
+            question = state.questions.get(key[0], {})
+            row = state.rows.get(key)
+            if row is None:
+                missing += 1
+                continue
+            status = _status(row.get("status"))
+            if status in FAILED_STATUSES | UNSUPPORTED_STATUSES:
+                continue
+            if status in PENDING_STATUSES:
+                missing += 1
+                continue
+            hits, trace = _extract_hits(row)
+            if not trace or hits is None:
+                missing += 1
+                continue
+            score = _mixed_ranked_values(question, hits, aliases, k)
+            if score is None:
+                missing += 1
+                continue
+            eligible += 1
+            recall_values.append(score["recall"])
+            hit_values.append(score["hit"])
+            precision_values.append(score["precision"])
+            complete_values.append(score["complete"])
+            if key in structured_keys:
+                structured_value = _mixed_structured_complete_value(question, hits, aliases, k)
+                if structured_value is None:
+                    structured_missing += 1
+                else:
+                    structured_complete_values.append(structured_value)
+        denominator = len(applicable_keys)
+        metrics[f"recall_at_{k}"] = _mixed_metric(f"recall_at_{k}", recall_values, denominator, eligible_n=eligible, missing_n=missing, failed_n=failed_applicable)
+        metrics[f"hit_at_{k}"] = _mixed_metric(f"hit_at_{k}", hit_values, denominator, eligible_n=eligible, missing_n=missing, failed_n=failed_applicable)
+        metrics[f"precision_at_{k}"] = _mixed_metric(f"precision_at_{k}", precision_values, denominator, eligible_n=eligible, missing_n=missing, failed_n=failed_applicable)
+        if not structured_keys:
+            # The common Gold currently has one document/evidence list, not
+            # the structured alternative-set contract.  Keep that distinction
+            # explicit instead of silently upgrading the adapted calculation.
+            metrics[f"complete_evidence_set_recall_at_{k}"] = na_record(
+                f"complete_evidence_set_recall_at_{k}",
+                MISSING_STRUCTURED_CLAIM_GOLD,
+                denominator=denominator,
+                eligible_n=0,
+                missing_n=denominator,
+                failed_n=failed_applicable,
+            )
+        else:
+            metrics[f"complete_evidence_set_recall_at_{k}"] = _mixed_metric(
+                f"complete_evidence_set_recall_at_{k}",
+                structured_complete_values,
+                len(structured_keys),
+                eligible_n=len(structured_complete_values),
+                missing_n=structured_missing,
+                failed_n=structured_failed,
+                protocol_label="MOI_UNIFIED_STRUCTURED_EVIDENCE_SETS",
+            )
+        metrics[f"adapted_complete_evidence_set_recall_at_{k}"] = _mixed_metric(
+            f"adapted_complete_evidence_set_recall_at_{k}",
+            complete_values,
+            denominator,
+            eligible_n=eligible,
+            missing_n=missing,
+            failed_n=failed_applicable,
+            protocol_label="ADAPTED_GOLD_DOC_OR_EVIDENCE_SET",
+        )
+
+    mrr_values: list[float] = []
+    map_values: list[float] = []
+    ndcg_values_by_k: dict[int, list[float]] = {k: [] for k in TOP_K}
+    mrr_eligible = 0
+    map_eligible = 0
+    ndcg_eligible_by_k: dict[int, int] = {k: 0 for k in TOP_K}
+    for key in applicable_keys:
+        question = state.questions.get(key[0], {})
+        row = state.rows.get(key)
+        if row is None or _status(row.get("status")) in FAILED_STATUSES | UNSUPPORTED_STATUSES:
+            continue
+        hits, trace = _extract_hits(row)
+        if not trace or hits is None:
+            continue
+        score = _mixed_ranked_values(question, hits, aliases, 10)
+        if score is None:
+            continue
+        mrr_values.append(score["mrr"])
+        map_values.append(score["map"])
+        mrr_eligible += 1
+        map_eligible += 1
+        if _mixed_has_graded_qrels(question, hits):
+            for k in TOP_K:
+                ndcg_value = _mixed_ndcg_value(question, hits, k)
+                if ndcg_value is not None:
+                    ndcg_values_by_k[k].append(ndcg_value)
+                    ndcg_eligible_by_k[k] += 1
+    metrics["mrr"] = _mixed_metric("mrr", mrr_values, len(applicable_keys), eligible_n=mrr_eligible, missing_n=max(0, len(applicable_keys) - mrr_eligible - failed_applicable), failed_n=failed_applicable)
+    metrics["map_at_10"] = _mixed_metric("map_at_10", map_values, len(applicable_keys), eligible_n=map_eligible, missing_n=max(0, len(applicable_keys) - map_eligible - failed_applicable), failed_n=failed_applicable)
+    for k in TOP_K:
+        ndcg_eligible = ndcg_eligible_by_k[k]
+        ndcg_values = ndcg_values_by_k[k]
+        metrics[f"ndcg_at_{k}"] = na_record(
+            f"ndcg_at_{k}",
+            "MISSING_GRADED_QRELS" if ndcg_eligible == 0 else "INCOMPLETE_GRADED_QRELS",
+            denominator=len(applicable_keys),
+            eligible_n=ndcg_eligible,
+            missing_n=max(0, len(applicable_keys) - ndcg_eligible - failed_applicable),
+            failed_n=failed_applicable,
+            numerator=sum(ndcg_values),
+        )
+
+    invalid_values: list[float] = []
+    invalid_eligible = 0
+    invalid_missing = 0
+    invalid_failed = 0
+    invalid_contract = False
+    for key, question, row in _mixed_rows_for_state(state):
+        valid_ids = _mixed_gold_ids(question)
+        if not valid_ids:
+            continue
+        if question.get("valid_doc_ids") not in (None, [], {}):
+            valid_ids = _as_ids(question["valid_doc_ids"])
+        if not valid_ids:
+            continue
+        invalid_contract = True
+        status = _status(row.get("status")) if row else "MISSING"
+        if status in FAILED_STATUSES:
+            invalid_failed += 1
+            continue
+        hits, trace = _extract_hits(row) if row else (None, False)
+        if not trace or hits is None:
+            invalid_missing += 1
+            continue
+        returned = _ordered_hits(hits)[:10]
+        if not returned:
+            invalid_values.append(0.0)
+        else:
+            invalid_values.append(sum(not _row_matches_gold_ids(hit, valid_ids, aliases) for hit in returned) / len(returned))
+        invalid_eligible += 1
+    if not invalid_contract:
+        metrics["invalid_extra_rate_at_10"] = na_record("invalid_extra_rate_at_10", "NO_INVALID_EXTRA_GOLD_CONTRACT", denominator=0, missing_n=0, failed_n=0)
+    else:
+        metrics["invalid_extra_rate_at_10"] = _mixed_metric(
+            "invalid_extra_rate_at_10",
+            invalid_values,
+            invalid_eligible + invalid_failed + invalid_missing,
+            eligible_n=invalid_eligible,
+            missing_n=invalid_missing,
+            failed_n=invalid_failed,
+            aggregation="micro_invalid_returned_items_at_10",
+        )
+    metrics["invalid_extra_docs_at_10"] = metrics["invalid_extra_rate_at_10"]
+    return metrics
+
+
+def _mixed_qa_metrics(state: StageState) -> dict[str, Any]:
+    metrics: dict[str, Any] = {}
+    answer_values: list[float] = []
+    answer_eligible = 0
+    answer_missing = 0
+    answer_failed = 0
+    lexical_values: dict[str, list[float]] = {"normalized_em": [], "token_f1": [], "contains_gold": []}
+    lexical_eligible = {name: 0 for name in lexical_values}
+    lexical_missing = {name: 0 for name in lexical_values}
+    lexical_failed = {name: 0 for name in lexical_values}
+    for key, question, row in _mixed_rows_for_state(state):
+        status = _status(row.get("status")) if row else "MISSING"
+        answer = _mixed_answer_from_row(row) if row else None
+        if answer is None and status == "EMPTY":
+            answer = ""
+        if status in FAILED_STATUSES:
+            answer_failed += 1
+        elif status in VALID_STATUSES and answer is not None:
+            answer_values.append(float(bool(answer.strip())))
+            answer_eligible += 1
+        else:
+            answer_missing += 1
+
+        gold = _gold_answer(question, row)
+        normalized_gold = normalize_text(gold) if gold else ""
+        if not normalized_gold:
+            continue
+        for name in lexical_values:
+            lexical_eligible[name] += 1
+            if status in FAILED_STATUSES:
+                lexical_failed[name] += 1
+                continue
+            if status not in VALID_STATUSES or answer is None:
+                lexical_missing[name] += 1
+                continue
+            normalized_answer = normalize_text(answer)
+            if name == "normalized_em":
+                value = float(normalized_answer == normalized_gold)
+            elif name == "contains_gold":
+                value = float(normalized_gold in normalized_answer)
+            else:
+                f1 = registry_token_f1(answer, gold)
+                value = 0.0 if f1 is None else f1
+            lexical_values[name].append(value)
+
+    metrics["answer_non_empty"] = _mixed_metric(
+        "answer_non_empty",
+        answer_values,
+        state.planned_n,
+        eligible_n=answer_eligible,
+        missing_n=answer_missing,
+        failed_n=answer_failed,
+    )
+    # Lexical metrics are deterministic diagnostics.  A row with empty Gold
+    # (even when it has evidence) is missing Gold for the lexical denominator;
+    # a failed row with non-empty Gold remains a zero in that denominator.
+    for name, values in lexical_values.items():
+        metrics[name] = _mixed_metric(
+            name,
+            values,
+            lexical_eligible[name],
+            eligible_n=lexical_eligible[name],
+            missing_n=lexical_missing[name],
+            failed_n=lexical_failed[name],
+        )
+    metrics["em"] = metrics["normalized_em"]
+    metrics["f1"] = metrics["token_f1"]
+    metrics["contains_gold_rate"] = metrics["contains_gold"]
+    metrics["adapted_em"] = metrics["normalized_em"]
+    metrics["adapted_f1"] = metrics["token_f1"]
+    metrics["adapted_contains_gold"] = metrics["contains_gold"]
+
+    answerable_keys = [key for key, question, _ in _mixed_rows_for_state(state) if answerability_label(question) == "answerable"]
+    false_refusal_values: list[float] = []
+    false_refusal_failed = 0
+    false_refusal_missing = 0
+    for key in answerable_keys:
+        row = state.rows.get(key) or {}
+        status = _status(row.get("status"))
+        if status in FAILED_STATUSES:
+            false_refusal_failed += 1
+            false_refusal_values.append(0.0)
+            continue
+        answer = _mixed_answer_from_row(row)
+        if status not in VALID_STATUSES or answer is None:
+            false_refusal_missing += 1
+            continue
+        false_refusal_values.append(float(_mixed_refusal(answer)))
+    metrics["false_refusal_rate"] = _mixed_metric(
+        "false_refusal_rate",
+        false_refusal_values,
+        len(answerable_keys),
+        eligible_n=len(false_refusal_values),
+        missing_n=false_refusal_missing,
+        failed_n=false_refusal_failed,
+        aggregation="answerable_question_macro; refusal_pattern_diagnostic",
+    )
+    return metrics
+
+
+def _judge_rows(run_root: Path) -> list[dict[str, Any]]:
+    candidates = (
+        run_root / "judge-terminal-ledger.jsonl",
+        run_root / "judge" / "judge-terminal-ledger.jsonl",
+        run_root / "judge" / "terminal-ledger.jsonl",
+    )
+    rows: list[dict[str, Any]] = []
+    for path in candidates:
+        if path.is_file():
+            rows.extend(_jsonl_load(path))
+    return rows
+
+
+_CANONICAL_JUDGE_DIMENSIONS = {
+    "claim_correctness": ("claim_correctness",),
+    "reference_claim_recall": ("reference_claim_recall",),
+    "critical_claim_coverage": ("critical_claim_coverage",),
+    "gold_evidence_support": ("gold_evidence_support",),
+    "grounding": ("grounding",),
+    "tdas": ("tdas",),
+}
+
+_ADAPTED_JUDGE_DIMENSIONS = {
+    "response_claim_correctness": ("response_claim_correctness",),
+    "reference_claim_recall_adapted": ("reference_claim_recall_adapted", "reference_claim_recall"),
+    "critical_claim_coverage_adapted": ("critical_claim_coverage_adapted", "critical_claim_coverage"),
+    "gold_evidence_support_adapted": ("gold_evidence_support_adapted", "gold_evidence_support"),
+    "runtime_context_faithfulness": ("runtime_context_faithfulness", "actual_context_faithfulness"),
+    "strict_unanswerable_success": ("strict_unanswerable_success", "strict_unanswerable", "strict_refusal", "strict_refusal_success"),
+    "info_not_found_success_adapted": ("info_not_found_success_adapted", "info_not_found_success", "enterprise_info_not_found_success"),
+    "strict_unanswerable": ("strict_unanswerable", "strict_refusal"),
+    "false_refusal": ("false_refusal",),
+    "answer_relevance": ("answer_relevance",),
+    "instruction_compliance": ("instruction_compliance",),
+    "contradiction_free": ("contradiction_free",),
+    "unsupported_claim_rate": ("unsupported_claim_rate",),
+}
+
+_ANSWERABLE_ONLY_ADAPTED_JUDGE_DIMENSIONS = frozenset(
+    {
+        "response_claim_correctness",
+        "reference_claim_recall_adapted",
+        "critical_claim_coverage_adapted",
+        "gold_evidence_support_adapted",
+        "runtime_context_faithfulness",
+    }
+)
+
+
+def _judge_dimension_value(row: Mapping[str, Any], name: str) -> float | None:
+    judgement = row.get("judgement", row.get("judgment", row.get("judge", row)))
+    if not isinstance(judgement, Mapping):
+        return None
+    dimensions = judgement.get("dimensions", judgement.get("metrics", judgement))
+    if not isinstance(dimensions, Mapping):
+        return None
+    candidates = _CANONICAL_JUDGE_DIMENSIONS.get(name) or _ADAPTED_JUDGE_DIMENSIONS.get(name) or (name,)
+    for candidate in candidates:
+        item = dimensions.get(candidate)
+        if isinstance(item, Mapping):
+            if item.get("supported") is False:
+                correctness = dimensions.get("response_claim_correctness")
+                if (
+                    name == "runtime_context_faithfulness"
+                    and row.get("context_available") is True
+                    and isinstance(correctness, Mapping)
+                    and correctness.get("supported") is True
+                    and isinstance(correctness.get("score"), (int, float))
+                    and not isinstance(correctness.get("score"), bool)
+                    and math.isfinite(float(correctness["score"]))
+                    and float(correctness["score"]) > 0
+                ):
+                    return 0.0
+                return None
+            value = item.get("score", item.get("value"))
+        else:
+            value = item
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
+            return float(value)
+    return None
+
+
+def _judge_metric(
+    state: StageState,
+    rows_by_key: Mapping[tuple[str, int], Mapping[str, Any]],
+    metric_id: str,
+    *,
+    keys: Sequence[tuple[str, int]] | None = None,
+    protocol_label: str | None = None,
+) -> dict[str, Any]:
+    selected = list(keys if keys is not None else state.units)
+    values: list[float] = []
+    failed = 0
+    missing = 0
+    for key in selected:
+        row = rows_by_key.get(key)
+        if row is None:
+            missing += 1
+            continue
+        status = _status(row.get("status"))
+        if status in FAILED_STATUSES:
+            failed += 1
+            continue
+        value = _judge_dimension_value(row, metric_id)
+        if value is None:
+            missing += 1
+            continue
+        values.append(value)
+    if missing:
+        return na_record(
+            metric_id,
+            INCOMPLETE_PLANNED_JUDGE_OBSERVATIONS,
+            denominator=len(selected),
+            eligible_n=len(values),
+            missing_n=missing,
+            failed_n=failed,
+            protocol_label=protocol_label,
+            planned_n=len(selected),
+            observed_n=len(values),
+        )
+    if not values:
+        return na_record(
+            metric_id,
+            "UNSUPPORTED_NEEDS_JUDGE",
+            denominator=len(selected),
+            eligible_n=0,
+            missing_n=missing,
+            failed_n=failed,
+            protocol_label=protocol_label,
+            planned_n=len(selected),
+            observed_n=0,
+        )
+    return metric_record(
+        metric_id,
+        value=sum(values) / len(selected) if selected else None,
+        numerator=sum(values),
+        denominator=len(selected),
+        eligible_n=len(values),
+        missing_n=missing,
+        failed_n=failed,
+        aggregation="judge_score_sum_over_planned_initial_denominator",
+        protocol_label=protocol_label or "JUDGE_ROWS_MERGED",
+        planned_n=len(selected),
+        observed_n=len(values),
+    )
+
+
+def _mixed_judge_metrics(
+    state: StageState,
+    judge_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    latest: dict[tuple[str, int], Mapping[str, Any]] = {}
+    for row in judge_rows:
+        qid = _row_question_id(row)
+        if not qid:
+            continue
+        latest[(qid, _repeat_id(row))] = row
+    answerable = [key for key in state.units if answerability_label(state.questions.get(key[0], {})) == "answerable"]
+    metrics = {}
+    for name, source_name in (
+            ("response_claim_correctness", "response_claim_correctness"),
+            ("reference_claim_recall_adapted", "reference_claim_recall_adapted"),
+            ("critical_claim_coverage_adapted", "critical_claim_coverage_adapted"),
+            ("gold_evidence_support_adapted", "gold_evidence_support_adapted"),
+            ("runtime_context_faithfulness", "runtime_context_faithfulness"),
+            ("answer_relevance", "answer_relevance"),
+            ("instruction_compliance", "instruction_compliance"),
+            ("contradiction_free", "contradiction_free"),
+            ("unsupported_claim_rate", "unsupported_claim_rate"),
+    ):
+        metrics[name] = _judge_metric(
+            state,
+            latest,
+            source_name,
+            keys=answerable if name in _ANSWERABLE_ONLY_ADAPTED_JUDGE_DIMENSIONS else None,
+            protocol_label="ADAPTED_REFERENCE_RUBRIC",
+        )
+    unanswerable = [key for key in state.units if answerability_label(state.questions.get(key[0], {})) == "unanswerable"]
+    info_not_found = [key for key in state.units if answerability_label(state.questions.get(key[0], {})) == "info_not_found"]
+    metrics["strict_unanswerable_success"] = _judge_metric(
+        state,
+        latest,
+        "strict_unanswerable_success",
+        keys=unanswerable,
+        protocol_label="ADAPTED_REFERENCE_RUBRIC",
+    )
+    metrics["info_not_found_success_adapted"] = _judge_metric(
+        state,
+        latest,
+        "info_not_found_success_adapted",
+        keys=info_not_found,
+        protocol_label="ADAPTED_REFERENCE_RUBRIC",
+    )
+    structured_complete = structured_claim_gold_available(
+        state.questions.get(key[0], {}) for key in state.units
+    )
+    for name in _CANONICAL_JUDGE_DIMENSIONS:
+        if not structured_complete:
+            metrics[name] = na_record(
+                name,
+                MISSING_STRUCTURED_CLAIM_GOLD,
+                denominator=state.planned_n,
+                eligible_n=0,
+                missing_n=state.planned_n,
+                protocol_label="CANONICAL_STRUCTURED_GOLD",
+                planned_n=state.planned_n,
+                observed_n=0,
+            )
+        else:
+            metrics[name] = _judge_metric(
+                state,
+                latest,
+                name,
+                protocol_label="CANONICAL_STRUCTURED_GOLD",
+            )
+    critical_keys = [key for key in state.units if answerability_label(state.questions.get(key[0], {})) == "answerable"]
+    if not structured_complete:
+        metrics["critical_contradiction_rate"] = na_record(
+            "critical_contradiction_rate",
+            MISSING_STRUCTURED_CLAIM_GOLD,
+            denominator=len(critical_keys),
+            missing_n=len(critical_keys),
+            protocol_label="CANONICAL_STRUCTURED_GOLD",
+            planned_n=len(critical_keys),
+            observed_n=0,
+        )
+    else:
+        contradiction_values: list[float] = []
+        contradiction_missing = 0
+        contradiction_failed = 0
+        for key in critical_keys:
+            row = latest.get(key)
+            status = _status(row.get("status")) if row else "MISSING"
+            if status in FAILED_STATUSES:
+                contradiction_failed += 1
+                continue
+            value = _judge_dimension_value(row, "contradiction_free") if row else None
+            if value is None:
+                contradiction_missing += 1
+                continue
+            contradiction_values.append(max(0.0, min(1.0, 1.0 - value)))
+        metrics["critical_contradiction_rate"] = _mixed_metric(
+            "critical_contradiction_rate",
+            contradiction_values,
+            len(critical_keys),
+            eligible_n=len(contradiction_values),
+            missing_n=contradiction_missing,
+            failed_n=contradiction_failed,
+            aggregation="answerable_question_macro_complement_of_contradiction_free_judge",
+            protocol_label="CRITICAL_CONTRADICTION_DERIVED_FROM_JUDGE",
+        )
+    return metrics
+
+
+def _mixed_refusal_metric(state: StageState, metric_id: str, label: str) -> dict[str, Any]:
+    keys = [key for key in state.units if answerability_label(state.questions.get(key[0], {})) == label]
+    values: list[float] = []
+    failed = 0
+    missing = 0
+    for key in keys:
+        row = state.rows.get(key) or {}
+        status = _status(row.get("status"))
+        if status in FAILED_STATUSES:
+            failed += 1
+            continue
+        answer = _mixed_answer_from_row(row)
+        if status not in VALID_STATUSES or answer is None:
+            missing += 1
+            continue
+        values.append(float(_mixed_refusal(answer)))
+    return _mixed_metric(
+        metric_id,
+        values,
+        len(keys),
+        eligible_n=len(values),
+        missing_n=missing,
+        failed_n=failed,
+        aggregation="adapted_refusal_pattern_over_initial_denominator",
+        protocol_label="ADAPTED_REFUSAL_PATTERN",
+    )
+
+
+def _normalize_legacy_stage_records(stage_result: dict[str, Any]) -> None:
+    for name, record in list(stage_result.get("metrics", {}).items()):
+        if isinstance(record, Mapping) and "value" in record:
+            stage_result["metrics"][name] = normalize_legacy_record(name, record)
+    for slice_result in stage_result.get("slices", {}).values():
+        if not isinstance(slice_result, Mapping):
+            continue
+        slice_metrics = slice_result.get("metrics")
+        if not isinstance(slice_metrics, dict):
+            continue
+        for name, record in list(slice_metrics.items()):
+            if isinstance(record, Mapping) and "value" in record:
+                slice_metrics[name] = normalize_legacy_record(name, record)
+
+
+def _mixed_latency_metrics(
+    retrieval_state: StageState,
+    qa_state: StageState,
+    *,
+    public_retrieval_supported: bool = True,
+) -> dict[str, Any]:
+    def values_for(state: StageState, stage: str) -> list[float]:
+        return [
+            value
+            for row in state.rows.values()
+            if _status(row.get("status")) not in PENDING_STATUSES and (value := _latency_value(row, stage)) is not None
+        ]
+
+    retrieval_values = values_for(retrieval_state, "retrieval") if public_retrieval_supported else []
+    qa_values = values_for(qa_state, "qa")
+    e2e_values: list[float] = []
+    for key in qa_state.units:
+        retrieval_row = retrieval_state.rows.get(key)
+        qa_row = qa_state.rows.get(key)
+        if retrieval_row is None or qa_row is None:
+            continue
+        retrieval_value = _latency_value(retrieval_row, "retrieval")
+        qa_value = _latency_value(qa_row, "qa")
+        if retrieval_value is not None and qa_value is not None:
+            e2e_values.append(retrieval_value + qa_value)
+    result: dict[str, Any] = {"retrieval": {}, "qa": {}, "e2e": {}}
+    for stage, values, state in (
+        ("retrieval", retrieval_values, retrieval_state),
+        ("qa", qa_values, qa_state),
+        ("e2e", e2e_values, qa_state),
+    ):
+        for label, fraction in (("p50", 0.50), ("p95", 0.95), ("p99", 0.99)):
+            metric_id = f"latency_ms.{stage}.{label}"
+            result[stage][label] = _mixed_percentile_metric(
+                metric_id,
+                values,
+                fraction,
+                planned_n=state.planned_n,
+                failed_n=state.failed_n,
+                na_reason="UNSUPPORTED_API" if stage == "retrieval" and not public_retrieval_supported else None,
+            )
+    return result
+
+
+def _mixed_request_success_metric(state: StageState) -> dict[str, Any]:
+    """Report request success separately from terminal availability.
+
+    ``EMPTY`` is terminal for latency accounting, but it is not a successful
+    answer request.  Keeping the two metrics separate prevents empty answers
+    from being silently promoted to success while preserving them in the
+    initial denominator.
+    """
+
+    success_n = sum(_status((state.rows.get(key) or {}).get("status")) == "SUCCESS" for key in state.units)
+    empty_n = sum(_status((state.rows.get(key) or {}).get("status")) == "EMPTY" for key in state.units)
+    unsupported_n = sum(_status((state.rows.get(key) or {}).get("status")) in UNSUPPORTED_STATUSES for key in state.units)
+    failed_n = state.failed_n + empty_n + unsupported_n
+    if not state.planned_n:
+        return na_record("request_success", "NO_PLANNED_ATTEMPTS", denominator=0)
+    if state.pending_n:
+        return na_record(
+            "request_success",
+            "INCOMPLETE_PLANNED_DENOMINATOR",
+            denominator=state.planned_n,
+            numerator=success_n,
+            eligible_n=state.terminal_n,
+            missing_n=state.pending_n,
+            failed_n=failed_n,
+            planned_n=state.planned_n,
+            observed_n=state.terminal_n,
+        )
+    record = metric_record(
+        "request_success",
+        value=success_n / state.planned_n,
+        numerator=success_n,
+        denominator=state.planned_n,
+        eligible_n=state.terminal_n,
+        missing_n=0,
+        failed_n=failed_n,
+        aggregation="successful_terminal_requests_over_planned_initial_denominator",
+        planned_n=state.planned_n,
+        observed_n=state.terminal_n,
+    )
+    record["diagnostics"]["empty_n"] = empty_n
+    record["diagnostics"]["unsupported_n"] = unsupported_n
+    return record
+
+
+def _mixed_repeat_consistency_metric(state: StageState) -> dict[str, Any]:
+    groups: dict[str, list[tuple[int, Mapping[str, Any] | None]]] = {}
+    for question_id, repeat_id in state.units:
+        groups.setdefault(question_id, []).append((repeat_id, state.rows.get((question_id, repeat_id))))
+    repeated = {question_id: sorted(rows) for question_id, rows in groups.items() if len(rows) > 1}
+    if not repeated:
+        return na_record(
+            "repeat_consistency",
+            "REPEAT_NOT_PLANNED",
+            denominator=0,
+            aggregation="not_applicable_without_repeated_question_units",
+        )
+    values: list[float] = []
+    missing = 0
+    failed = 0
+    for rows in repeated.values():
+        signatures: list[tuple[str, str]] = []
+        complete = True
+        for _, row in rows:
+            if row is None:
+                complete = False
+                break
+            status = _status(row.get("status"))
+            if status in FAILED_STATUSES | UNSUPPORTED_STATUSES | PENDING_STATUSES:
+                if status in FAILED_STATUSES | UNSUPPORTED_STATUSES:
+                    failed += 1
+                complete = False
+                break
+            signatures.append((status, normalize_text(_mixed_answer_from_row(row))))
+        if not complete:
+            missing += 1
+            continue
+        values.append(float(len(set(signatures)) == 1))
+    return _mixed_metric(
+        "repeat_consistency",
+        values,
+        len(repeated),
+        eligible_n=len(values),
+        missing_n=missing,
+        failed_n=failed,
+        aggregation="question_macro_exact_status_and_normalized_answer_stability",
+        protocol_label="REPEAT_CONSISTENCY_DIAGNOSTIC",
+    )
+
+
+def _mixed_citation_values(row: Mapping[str, Any] | None) -> list[Any]:
+    """Read only explicit citation fields; never parse citations from answer text."""
+
+    if not isinstance(row, Mapping):
+        return []
+    for key in ("citations", "citation", "references", "source_citations", "answer_citations"):
+        value = row.get(key)
+        if value not in (None, "", [], {}):
+            return _as_list(value)
+    return []
+
+
+def _mixed_citation_id_set(value: Any) -> set[str]:
+    return _hit_ids(value)
+
+
+def _mixed_citation_metrics(
+    state: StageState,
+    package: PackageData,
+    aliases: Mapping[str, set[str]],
+) -> dict[str, Any]:
+    known_ids: set[str] = set()
+    for row in package.corpus:
+        for identifier in _evidence_ids(row):
+            known_ids.update(_id_variants(identifier))
+    for values in aliases.values():
+        known_ids.update(values)
+
+    total = 0
+    valid = 0
+    fabricated = 0
+    out_of_scope = 0
+    entailment_values: list[float] = []
+    entailment_missing = 0
+    required_attempts = 0
+    required_with_valid_citation = 0
+    required_claim_trace = False
+    for key, question, row in _mixed_rows_for_state(state):
+        citations = _mixed_citation_values(row)
+        answerable = answerability_label(question) == "answerable"
+        required = question.get("citation_required") is True or str(question.get("citation_required", "")).casefold() in {"true", "yes", "1"}
+        if required and answerable:
+            required_attempts += 1
+        if not citations:
+            if required and answerable and _status(row.get("status")) in VALID_STATUSES:
+                # The benchmark protocol explicitly treats a missing citation
+                # on a citation-required answer as zero coverage.
+                continue
+            continue
+        allowed_ids = _as_ids(
+            _first(question, "allowed_document_ids", "allowed_doc_ids", "scope_doc_ids", default=None)
+        ) or _gold_doc_ids(question)
+        scope_declared = any(
+            key in question
+            for key in ("allowed_document_ids", "allowed_doc_ids", "scope_doc_ids", "gold_doc_ids", "gold_document_ids", "document_ids")
+        ) or answerability_label(question) == "unanswerable"
+        for citation in citations:
+            total += 1
+            citation_ids = _mixed_citation_id_set(citation)
+            is_valid = bool(citation_ids & known_ids)
+            if is_valid:
+                valid += 1
+            else:
+                fabricated += 1
+            if scope_declared and is_valid and not _match_id_sets(allowed_ids, citation_ids, aliases):
+                out_of_scope += 1
+            if isinstance(citation, Mapping):
+                explicit_entailment = _first(citation, "entails", "entailed", "supported", "citation_entails", default=None)
+                if isinstance(explicit_entailment, bool):
+                    entailment_values.append(float(explicit_entailment))
+                elif explicit_entailment is not None:
+                    entailment_missing += 1
+        if required and answerable:
+            required_with_valid_citation += int(any(_match_id_sets(allowed_ids, _mixed_citation_id_set(item), aliases) for item in citations)) if allowed_ids else 0
+        if _first(row, "response_claims", "claims", default=None) not in (None, [], {}):
+            required_claim_trace = True
+
+    if total:
+        locator = metric_record(
+            "citation_locator_validity",
+            value=valid / total,
+            numerator=valid,
+            denominator=total,
+            eligible_n=total,
+            aggregation="submitted_citation_micro",
+            protocol_label="EXPLICIT_CITATION_LOCATOR_ONLY",
+        )
+        fabricated_record = metric_record(
+            "fabricated_citation_count",
+            value=fabricated,
+            numerator=fabricated,
+            denominator=total,
+            eligible_n=total,
+            unit="count",
+            aggregation="submitted_citation_micro",
+            protocol_label="EXPLICIT_CITATION_LOCATOR_ONLY",
+        )
+        out_of_scope_record = metric_record(
+            "out_of_scope_citation_count",
+            value=out_of_scope,
+            numerator=out_of_scope,
+            denominator=total,
+            eligible_n=total,
+            unit="count",
+            aggregation="submitted_citation_micro",
+            protocol_label="EXPLICIT_CITATION_SCOPE_ONLY",
+        )
+    else:
+        locator = na_record("citation_locator_validity", "NO_SUBMITTED_CITATION", denominator=0)
+        fabricated_record = na_record("fabricated_citation_count", "NO_SUBMITTED_CITATION", denominator=0, unit="count")
+        out_of_scope_record = na_record("out_of_scope_citation_count", "NO_SUBMITTED_CITATION", denominator=0, unit="count")
+
+    if entailment_values and not entailment_missing and len(entailment_values) == total:
+        entailment = metric_record(
+            "citation_entailment_precision",
+            value=sum(entailment_values) / total,
+            numerator=sum(entailment_values),
+            denominator=total,
+            eligible_n=total,
+            aggregation="submitted_citation_micro_explicit_entailment_trace",
+            protocol_label="EXPLICIT_CITATION_ENTAILMENT_TRACE",
+        )
+    elif not total:
+        entailment = na_record("citation_entailment_precision", "NO_SUBMITTED_CITATION", denominator=0)
+    else:
+        entailment = na_record(
+            "citation_entailment_precision",
+            "CITATION_ENTAILMENT_TRACE_UNAVAILABLE",
+            denominator=total,
+            eligible_n=len(entailment_values),
+            missing_n=max(0, total - len(entailment_values)),
+            numerator=sum(entailment_values),
+        )
+
+    if required_attempts:
+        coverage = metric_record(
+            "answer_claim_citation_coverage",
+            value=required_with_valid_citation / required_attempts if not required_claim_trace else None,
+            numerator=required_with_valid_citation,
+            denominator=required_attempts,
+            eligible_n=required_attempts if not required_claim_trace else 0,
+            missing_n=0 if not required_claim_trace else required_attempts,
+            na_reason="CITATION_CLAIM_TRACE_UNAVAILABLE" if required_claim_trace else None,
+            aggregation="citation_required_attempt_macro_explicit_locator",
+            protocol_label="EXPLICIT_CITATION_REQUIRED_GATE",
+        )
+        if required_claim_trace:
+            coverage = na_record(
+                "answer_claim_citation_coverage",
+                "CITATION_CLAIM_TRACE_UNAVAILABLE",
+                denominator=required_attempts,
+                eligible_n=0,
+                missing_n=required_attempts,
+                numerator=required_with_valid_citation,
+                protocol_label="EXPLICIT_CITATION_REQUIRED_GATE",
+            )
+    else:
+        coverage = na_record("answer_claim_citation_coverage", "NO_CITATION_REQUIRED_CLAIMS", denominator=0)
+    return {
+        "citation_locator_validity": locator,
+        "citation_entailment_precision": entailment,
+        "answer_claim_citation_coverage": coverage,
+        "fabricated_citation_count": fabricated_record,
+        "out_of_scope_citation_count": out_of_scope_record,
+    }
+
+
+def _failure_class(row: Mapping[str, Any] | None) -> str:
+    if not row:
+        return "pending"
+    status = _status(row.get("status"))
+    if status == "SUCCESS":
+        return "success"
+    if status == "EMPTY":
+        return "empty"
+    if status in UNSUPPORTED_STATUSES:
+        return "unsupported"
+    if status in PENDING_STATUSES:
+        return "pending"
+    text = " ".join(str(row.get(key, "")) for key in ("error", "error_code", "reason", "provider_status", "status")).casefold()
+    if any(marker in text for marker in ("timeout", "timed_out", "deadline", "read timed")):
+        return "timeout"
+    if any(marker in text for marker in ("provider", "maas", "http", "429", "500", "502", "503", "504", "rate limit")):
+        return "provider_error"
+    if any(marker in text for marker in ("schema", "json", "parse", "contract")):
+        return "schema_error"
+    if status in FAILED_STATUSES:
+        return "product_error"
+    return "unknown"
+
+
+def _corpus_text_length(package: PackageData, row: Mapping[str, Any]) -> int | None:
+    for key in ("content", "text", "markdown", "body"):
+        value = row.get(key)
+        if isinstance(value, str) and value:
+            return len(value)
+    metadata = _mapping(row.get("metadata")) or {}
+    for key in ("text_path", "path", "file_path", "content_path", "markdown_path"):
+        value = row.get(key, metadata.get(key))
+        if value in (None, ""):
+            continue
+        path = Path(str(value)).expanduser()
+        if not path.is_absolute():
+            path = package.root / path
+        if path.is_file():
+            try:
+                return len(path.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                return None
+    return None
+
+
+def _document_length_slice_info(package: PackageData) -> tuple[dict[str, str], dict[str, Any]]:
+    entries: list[tuple[str, int, set[str]]] = []
+    for index, row in enumerate(package.corpus):
+        length = _corpus_text_length(package, row)
+        if length is None:
+            continue
+        identifiers = set().union(*(_id_variants(item) for item in _evidence_ids(row)))
+        if not identifiers:
+            identifiers = {f"__corpus_row_{index}"}
+        canonical = str(_first(row, "doc_id", "document_id", "id", "title", default=f"row-{index}"))
+        entries.append((canonical, length, identifiers))
+    entries.sort(key=lambda item: (item[1], item[0].casefold()))
+    labels: dict[str, str] = {}
+    for index, (_, _, identifiers) in enumerate(entries):
+        label = f"q{min(5, (index * 5) // max(1, len(entries)) + 1)}"
+        for identifier in identifiers:
+            labels[identifier] = label
+    return labels, {
+        "unit": "unicode_codepoints",
+        "bucket_method": "empirical_frozen_corpus_quintile_by_document_length",
+        "labels": ["q1", "q2", "q3", "q4", "q5"],
+        "unknown_label": "unknown",
+        "observed_document_n": len(entries),
+    }
+
+
+def _document_length_label(question: Mapping[str, Any], labels: Mapping[str, str]) -> str:
+    matched = [labels[variant] for identifier in _gold_doc_ids(question) for variant in _id_variants(identifier) if variant in labels]
+    if not matched:
+        return "unknown"
+    return max(matched, key=lambda value: int(value[1:]) if value.startswith("q") else -1)
+
+
+def _mixed_apply_structured_gold_gate(state: StageState, metrics: dict[str, Any]) -> dict[str, Any]:
+    questions = [state.questions.get(key[0], {}) for key in state.units]
+    if structured_claim_gold_available(questions):
+        return metrics
+    for name in (
+        "claim_correctness",
+        "reference_claim_recall",
+        "critical_claim_coverage",
+        "gold_evidence_support",
+        "grounding",
+        "tdas",
+    ):
+        metrics[name] = na_record(
+            name,
+            MISSING_STRUCTURED_CLAIM_GOLD,
+            denominator=state.planned_n,
+            missing_n=state.planned_n,
+            protocol_label="CANONICAL_STRUCTURED_GOLD",
+            planned_n=state.planned_n,
+            observed_n=0,
+        )
+    return metrics
+
+
+def _mixed_native_source_result(
+    source: str,
+    package: PackageData,
+    retrieval_state: StageState,
+    qa_state: StageState,
+    aliases: Mapping[str, set[str]],
+    judge_rows: Sequence[Mapping[str, Any]],
+    *,
+    public_retrieval_supported: bool,
+) -> dict[str, Any]:
+    source_package = replace(package, dataset_id=source)
+    legacy_retrieval = _stage_result("retrieval", retrieval_state, source_package, aliases)
+    legacy_qa = _stage_result("qa", qa_state, source_package, aliases)
+    _normalize_legacy_stage_records(legacy_retrieval)
+    _normalize_legacy_stage_records(legacy_qa)
+
+    custom_retrieval = _mixed_retrieval_metrics(
+        retrieval_state,
+        source_package,
+        aliases,
+        public_retrieval_supported=public_retrieval_supported,
+    )
+    if source != "enterprise-rag-bench":
+        custom_retrieval["invalid_extra_rate_at_10"] = na_record(
+            "invalid_extra_rate_at_10",
+            "NO_INVALID_EXTRA_GOLD_CONTRACT",
+            denominator=0,
+        )
+        custom_retrieval["invalid_extra_docs_at_10"] = custom_retrieval["invalid_extra_rate_at_10"]
+    legacy_retrieval["metrics"].update(custom_retrieval)
+    if not public_retrieval_supported:
+        for slice_result in legacy_retrieval.get("slices", {}).values():
+            if not isinstance(slice_result, Mapping):
+                continue
+            slice_metrics = slice_result.get("metrics")
+            denominator = (slice_result.get("denominator") or {}).get("planned_n", 0) if isinstance(slice_result.get("denominator"), Mapping) else 0
+            if not isinstance(slice_metrics, dict):
+                continue
+            for name in list(slice_metrics):
+                if any(name.casefold().startswith(prefix) for prefix in ("recall", "r@", "hit", "precision", "mrr", "map", "ndcg", "evidence", "page", "layout", "source")):
+                    slice_metrics[name] = na_record(name, "UNSUPPORTED_API", denominator=denominator)
+
+    custom_qa = _mixed_qa_metrics(qa_state)
+    judge = _mixed_judge_metrics(qa_state, judge_rows)
+    if not judge_rows:
+        judge["info_not_found_success_adapted"] = _mixed_refusal_metric(qa_state, "info_not_found_success_adapted", "info_not_found")
+    custom_qa.update(
+        {
+            "strict_unanswerable_success": judge["strict_unanswerable_success"],
+            "info_not_found_success_adapted": judge["info_not_found_success_adapted"],
+        }
+    )
+    legacy_qa["metrics"].update(custom_qa)
+    latency = _mixed_latency_metrics(
+        retrieval_state,
+        qa_state,
+        public_retrieval_supported=public_retrieval_supported,
+    )
+    legacy_retrieval["latency_ms"] = latency["retrieval"]
+    legacy_qa["latency_ms"] = latency["qa"]
+    legacy_qa["e2e_latency_ms"] = latency["e2e"]
+    for label, record in latency["retrieval"].items():
+        legacy_retrieval["metrics"][f"retrieval_latency_ms_{label}"] = record
+        legacy_retrieval["metrics"][f"latency_ms_{label}"] = record
+    for label, record in latency["qa"].items():
+        legacy_qa["metrics"][f"generation_latency_ms_{label}"] = record
+        legacy_qa["metrics"][f"latency_ms_{label}"] = record
+    for label, record in latency["e2e"].items():
+        legacy_qa["metrics"][f"e2e_latency_ms_{label}"] = record
+    legacy_retrieval["values"] = {name: record.get("value") for name, record in legacy_retrieval["metrics"].items() if isinstance(record, Mapping)}
+    legacy_qa["values"] = {name: record.get("value") for name, record in legacy_qa["metrics"].items() if isinstance(record, Mapping)}
+    return {
+        "source_dataset": source,
+        "protocol": package.protocol_tag,
+        "retrieval": legacy_retrieval,
+        "qa": legacy_qa,
+        "judge": judge,
+    }
+
+
+def _mixed_slice_payload(
+    units: Sequence[tuple[str, int]],
+    retrieval_state: StageState,
+    qa_state: StageState,
+    package: PackageData,
+    aliases: Mapping[str, set[str]],
+    judge_rows: Sequence[Mapping[str, Any]],
+    *,
+    public_retrieval_supported: bool,
+) -> dict[str, Any]:
+    subset_retrieval = _state_for_units(retrieval_state, units)
+    subset_qa = _state_for_units(qa_state, units)
+    retrieval = _mixed_retrieval_metrics(
+        subset_retrieval,
+        package,
+        aliases,
+        public_retrieval_supported=public_retrieval_supported,
+    )
+    qa = _mixed_qa_metrics(subset_qa)
+    _mixed_apply_structured_gold_gate(subset_qa, qa)
+    judge = _mixed_judge_metrics(subset_qa, judge_rows)
+    if not judge_rows:
+        judge["info_not_found_success_adapted"] = _mixed_refusal_metric(subset_qa, "info_not_found_success_adapted", "info_not_found")
+    qa["strict_unanswerable_success"] = judge["strict_unanswerable_success"]
+    qa["info_not_found_success_adapted"] = judge["info_not_found_success_adapted"]
+    metrics = {**retrieval, **qa}
+    metrics.update(judge)
+    metrics["request_success"] = _mixed_request_success_metric(subset_qa)
+    metrics["repeat_consistency"] = _mixed_repeat_consistency_metric(subset_qa)
+    metrics.update(_mixed_citation_metrics(subset_qa, package, aliases))
+    return {
+        "denominator": subset_qa.denominator,
+        "status_counts": subset_qa.status_counts,
+        "metrics": metrics,
+        "judge": judge,
+        "latency_ms": _mixed_latency_metrics(
+            subset_retrieval,
+            subset_qa,
+            public_retrieval_supported=public_retrieval_supported,
+        ),
+    }
+
+
+def _mixed_slice_value(
+    retrieval_state: StageState,
+    qa_state: StageState,
+    key: tuple[str, int],
+    dimension: str,
+    *,
+    document_length_labels: Mapping[str, str] | None = None,
+) -> str:
+    question = qa_state.questions.get(key[0], {})
+    row = qa_state.rows.get(key) or retrieval_state.rows.get(key)
+    if dimension == "source_dataset":
+        return source_for_row(row, question)
+    if dimension == "question_type":
+        return _question_type(question)
+    if dimension == "answerability":
+        return answerability_label(question)
+    if dimension == "gold_doc_count":
+        count = gold_doc_count(question)
+        return "4+" if count >= 4 else str(count)
+    if dimension == "document_length":
+        return _document_length_label(question, document_length_labels or {})
+    if dimension == "failure_class":
+        return _failure_class(row)
+    return "unknown"
+
+
+def _mixed_slice_units(
+    retrieval_state: StageState,
+    qa_state: StageState,
+    dimension: str,
+    label: str,
+    *,
+    package: PackageData | None = None,
+    document_length_labels: Mapping[str, str] | None = None,
+) -> list[tuple[str, int]]:
+    units: list[tuple[str, int]] = []
+    for key in qa_state.units:
+        value = _mixed_slice_value(
+            retrieval_state,
+            qa_state,
+            key,
+            dimension,
+            document_length_labels=document_length_labels,
+        )
+        if value == label:
+            units.append(key)
+    return units
+
+
+def _mixed_unified_report(
+    run_root: Path,
+    run_manifest: Mapping[str, Any],
+    package: PackageData,
+    retrieval_state: StageState,
+    qa_state: StageState,
+    aliases: Mapping[str, set[str]],
+    judge_rows: Sequence[Mapping[str, Any]],
+    readiness: Mapping[str, Any],
+) -> dict[str, Any]:
+    public_retrieval_supported = _mixed_public_retrieval_supported(run_manifest)
+    document_length_labels, document_length_definition = _document_length_slice_info(package)
+    retrieval = _mixed_retrieval_metrics(
+        retrieval_state,
+        package,
+        aliases,
+        public_retrieval_supported=public_retrieval_supported,
+    )
+    qa = _mixed_qa_metrics(qa_state)
+    _mixed_apply_structured_gold_gate(qa_state, qa)
+    judge = _mixed_judge_metrics(qa_state, judge_rows)
+    if not judge_rows:
+        judge["info_not_found_success_adapted"] = _mixed_refusal_metric(qa_state, "info_not_found_success_adapted", "info_not_found")
+    qa["strict_unanswerable_success"] = judge["strict_unanswerable_success"]
+    qa["info_not_found_success_adapted"] = judge["info_not_found_success_adapted"]
+
+    planned_n = qa_state.planned_n
+    failed_n = qa_state.failed_n
+    pending_n = qa_state.pending_n
+    source_valid = sum(
+        bool(source_for_row(retrieval_state.rows.get(key) or qa_state.rows.get(key), qa_state.questions.get(key[0], {})) != "unknown")
+        for key in qa_state.units
+    )
+    validity = metric_record(
+        "validity",
+        value=source_valid / planned_n if planned_n and source_valid == planned_n else None,
+        numerator=source_valid,
+        denominator=planned_n,
+        eligible_n=source_valid,
+        missing_n=max(0, planned_n - source_valid),
+        failed_n=0,
+    )
+    readiness_rate = readiness.get("ready_rate")
+    if isinstance(readiness_rate, Mapping) and readiness_rate.get("value") is not None:
+        readiness_metric = metric_record(
+            "readiness",
+            value=readiness_rate.get("value"),
+            numerator=readiness_rate.get("numerator"),
+            denominator=readiness_rate.get("denominator"),
+            eligible_n=int(readiness_rate.get("denominator", 0) or 0),
+            missing_n=max(0, int(readiness_rate.get("denominator", 0) or 0) - int(readiness_rate.get("numerator", 0) or 0)),
+            failed_n=sum(value for key, value in (readiness.get("status_counts") or {}).items() if str(key).casefold() in {"failed", "error", "timeout"}),
+        )
+    else:
+        readiness_metric = na_record(
+            "readiness",
+            str(readiness.get("reason", "UNSUPPORTED_READINESS_LEDGER_UNAVAILABLE")),
+            denominator=int(readiness.get("planned_n", len(package.corpus)) or 0),
+        )
+    availability = metric_record(
+        "initial_availability",
+        value=(qa_state.valid_n / planned_n) if planned_n and not pending_n else None,
+        numerator=qa_state.valid_n,
+        denominator=planned_n,
+        eligible_n=qa_state.valid_n,
+        missing_n=pending_n,
+        failed_n=failed_n,
+    )
+    error_rate = metric_record(
+        "error_rate",
+        value=((failed_n + qa_state.unsupported_n) / planned_n) if planned_n and not pending_n else None,
+        numerator=failed_n + qa_state.unsupported_n,
+        denominator=planned_n,
+        eligible_n=planned_n - pending_n,
+        missing_n=pending_n,
+        failed_n=failed_n,
+    )
+    initial_error_rate = dict(error_rate)
+    initial_error_rate["metric_id"] = "initial_error_rate"
+    initial_error_rate["metric"] = "initial_error_rate"
+
+    metrics: dict[str, Any] = {
+        "validity": validity,
+        "readiness": readiness_metric,
+        "initial_availability": availability,
+        "availability": availability,
+        "error_rate": error_rate,
+        "initial_error_rate": initial_error_rate,
+        "initial_error": initial_error_rate,
+        **retrieval,
+        **qa,
+        **judge,
+        "request_success": _mixed_request_success_metric(qa_state),
+        "repeat_consistency": _mixed_repeat_consistency_metric(qa_state),
+        **_mixed_citation_metrics(qa_state, package, aliases),
+    }
+    latency = _mixed_latency_metrics(
+        retrieval_state,
+        qa_state,
+        public_retrieval_supported=public_retrieval_supported,
+    )
+    for stage, stage_values in latency.items():
+        for percentile_name, record in stage_values.items():
+            metrics[f"{stage}_latency_ms_{percentile_name}"] = record
+    metrics["MAP@10"] = metrics["map_at_10"]
+    metrics["nDCG@10"] = metrics["ndcg_at_10"]
+    metrics["MRR@10"] = metrics["mrr"]
+    for k in TOP_K:
+        metrics[f"Recall@{k}"] = metrics[f"recall_at_{k}"]
+        metrics[f"Hit@{k}"] = metrics[f"hit_at_{k}"]
+        metrics[f"Precision@{k}"] = metrics[f"precision_at_{k}"]
+
+    source_names = sorted({_mixed_source_for_unit(retrieval_state, qa_state, key) for key in qa_state.units})
+    slices: dict[str, dict[str, Any]] = {}
+    slice_dimensions = ("source_dataset", "question_type", "answerability", "gold_doc_count", "document_length", "failure_class")
+    for dimension in slice_dimensions:
+        by_label: dict[str, Any] = {}
+        labels = sorted(
+            {
+                _mixed_slice_value(
+                    retrieval_state,
+                    qa_state,
+                    key,
+                    dimension,
+                    document_length_labels=document_length_labels,
+                )
+                for key in qa_state.units
+            }
+        )
+        for label in labels:
+            by_label[label] = _mixed_slice_payload(
+                _mixed_slice_units(
+                    retrieval_state,
+                    qa_state,
+                    dimension,
+                    label,
+                    package=package,
+                    document_length_labels=document_length_labels,
+                ),
+                retrieval_state,
+                qa_state,
+                package,
+                aliases,
+                judge_rows,
+                public_retrieval_supported=public_retrieval_supported,
+            )
+        slices[dimension] = by_label
+
+    return {
+        "registry_version": REGISTRY_VERSION,
+        "protocol": "MOI_UNIFIED_ADAPTED_V1",
+        "public_retrieval_supported": public_retrieval_supported,
+        "source_datasets": source_names,
+        "metrics": metrics,
+        "judge": judge,
+        "latency_ms": latency,
+        "slices": slices,
+        "slice_definitions": {
+            "document_length": document_length_definition,
+            "failure_class": {
+                "labels": ["success", "empty", "timeout", "provider_error", "schema_error", "product_error", "unsupported", "pending", "unknown"],
+                "source": "QA terminal status/error_code/error; retrieval status when QA row is absent",
+            },
+        },
+        "denominator": qa_state.denominator,
+        "status_counts": qa_state.status_counts,
+        "limitations": [
+            "Canonical claim/grounding/TDAS metrics are N/A until scored_reference_claims, critical_claims, and evidence_sets are present in Gold.",
+            "Adapted lexical answer and Gold document/evidence metrics are diagnostic and are not a compensating overall score.",
+        ],
+    }
+
+
+def _mixed_metric_partitions(
+    run_root: Path,
+    run_manifest: Mapping[str, Any],
+    package: PackageData,
+    retrieval_state: StageState,
+    qa_state: StageState,
+    aliases: Mapping[str, set[str]],
+    readiness: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    judge_rows = _judge_rows(run_root)
+    sources = sorted({_mixed_source_for_unit(retrieval_state, qa_state, key) for key in qa_state.units})
+    public_retrieval_supported = _mixed_public_retrieval_supported(run_manifest)
+    native_by_source: dict[str, Any] = {}
+    for source in sources:
+        units = [key for key in qa_state.units if _mixed_source_for_unit(retrieval_state, qa_state, key) == source]
+        native_by_source[source] = _mixed_native_source_result(
+            source,
+            package,
+            _state_for_units(retrieval_state, units),
+            _state_for_units(qa_state, units),
+            aliases,
+            judge_rows,
+            public_retrieval_supported=public_retrieval_supported,
+        )
+    native = {
+        "registry_version": REGISTRY_VERSION,
+        "partition": "DATASET_NATIVE_OFFICIAL_OR_ADAPTED",
+        "by_source_dataset": native_by_source,
+    }
+    unified = _mixed_unified_report(
+        run_root,
+        run_manifest,
+        package,
+        retrieval_state,
+        qa_state,
+        aliases,
+        judge_rows,
+        readiness,
+    )
+    return native, unified
+
+
 def _nested_find(mapping: Any, keys: Sequence[str]) -> Any:
     wanted = {key.casefold() for key in keys}
     for value in _iter_nested_mappings(mapping):
@@ -1928,11 +3671,61 @@ def _readiness(run_root: Path, package: PackageData) -> dict[str, Any]:
         if not isinstance(resource, Mapping):
             continue
         documents = resource.get("documents", {})
-        if isinstance(documents, Mapping):
+        if isinstance(documents, Mapping) and documents:
             for document in documents.values():
                 if isinstance(document, Mapping):
                     document_count += 1
                     statuses[str(document.get("status", "unknown")).casefold()] += 1
+            continue
+        if isinstance(documents, Sequence) and not isinstance(documents, (str, bytes)) and documents:
+            for document in documents:
+                if isinstance(document, Mapping):
+                    document_count += 1
+                    statuses[str(document.get("status", "unknown")).casefold()] += 1
+            continue
+
+        # Global-scope runners intentionally keep ``documents`` compact: the
+        # resource-level fields are the durable readiness summary, while the
+        # candidate IDs and materialized artifact hashes remain in the same
+        # checkpoint.  Do not mistake an empty per-document map for zero
+        # observed documents after a successful ingest.
+        def nonnegative_int(name: str) -> int | None:
+            value = resource.get(name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return None
+            return value
+
+        declared_count = nonnegative_int("document_count")
+        ready_count = nonnegative_int("ready_document_count")
+        ready_count_missing = ready_count is None
+        unsupported_count = nonnegative_int("unsupported_document_count") or 0
+        failed_count = nonnegative_int("failed_document_count") or 0
+        resource_status = str(resource.get("status", "unknown")).casefold()
+        resource_ready = bool(resource.get("ready")) or resource_status in {"ready", "indexed", "completed", "available"}
+        if declared_count is None and ready_count is None:
+            continue
+        if declared_count is None:
+            declared_count = ready_count or 0
+
+        if ready_count_missing:
+            ready_count = declared_count if resource_ready else 0
+        ready_count = min(ready_count, declared_count)
+        unsupported_count = min(unsupported_count, max(0, declared_count - ready_count))
+        failed_count = min(failed_count, max(0, declared_count - ready_count - unsupported_count))
+        observed_count = min(declared_count, ready_count + unsupported_count + failed_count)
+        if observed_count:
+            document_count += observed_count
+            if ready_count:
+                statuses["ready"] += ready_count
+            if unsupported_count:
+                statuses["unsupported"] += unsupported_count
+            if failed_count:
+                statuses["failed"] += failed_count
+        elif ready_count_missing and resource_ready and declared_count:
+            # A legacy compact checkpoint may only expose ``ready`` and the
+            # planned document count.  Treat that combination as all ready.
+            document_count += declared_count
+            statuses["ready"] += declared_count
         else:
             statuses[str(resource.get("status", "unknown")).casefold()] += 1
     ready = sum(statuses.get(value, 0) for value in ("ready", "indexed", "completed", "available"))
@@ -1981,6 +3774,12 @@ def aggregate_run(run: str | Path, package: str | Path) -> dict[str, Any]:
     # preserve the frozen denominator/question slices; metrics still consume
     # terminal rows below.
     questions = _question_map(package_data, [*terminal_rows, *initial])
+    # Legacy single-dataset packages predate row-level routing.  Materialize
+    # their package dataset as the fallback only when a question has no
+    # explicit source_dataset; mixed packages keep their per-row source route.
+    for question in questions.values():
+        if not str(question.get("source_dataset") or "").strip():
+            question["source_dataset"] = package_data.dataset_id
     aliases = _metadata_identifier_aliases(package_data)
     retrieval_state = _build_stage("retrieval", package_data, run_manifest, initial, terminal_rows, questions)
     qa_state = _build_stage("qa", package_data, run_manifest, initial, terminal_rows, questions)
@@ -1988,6 +3787,18 @@ def aggregate_run(run: str | Path, package: str | Path) -> dict[str, Any]:
     base_result["qa"] = _stage_result("qa", qa_state, package_data, aliases)
     base_result["readiness"] = _readiness(run_root, package_data)
     base_result["coverage"] = _coverage(package_data)
+    dataset_native, moi_unified = _mixed_metric_partitions(
+        run_root,
+        run_manifest,
+        package_data,
+        retrieval_state,
+        qa_state,
+        aliases,
+        base_result["readiness"],
+    )
+    base_result["dataset_native"] = dataset_native
+    base_result["moi_unified"] = moi_unified
+    base_result["metric_registry"] = {"version": REGISTRY_VERSION, "metrics": METRIC_REGISTRY}
     base_result["ledger"] = {
         "initial_n": len(initial),
         "terminal_n": len(terminal_rows),

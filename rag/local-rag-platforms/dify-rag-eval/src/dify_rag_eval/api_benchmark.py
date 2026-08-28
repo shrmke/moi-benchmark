@@ -27,7 +27,7 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 
-BENCHMARK_VERSION = "0.1"
+BENCHMARK_VERSION = "0.3"
 USER_AGENT = f"MOI-RAG-Benchmark/{BENCHMARK_VERSION}"
 SUPPORTED_PROTOCOLS = {"auto", "sse", "json"}
 SCENARIO_NAMES = {"events", "empty_workflow"}
@@ -132,11 +132,14 @@ class _SSEParser:
             event_type = event_name
         elif isinstance(parsed, dict):
             event_type = "message"
-            for key in ("event", "type", "step_type", "step_name", "source"):
-                value = parsed.get(key)
-                if value not in (None, ""):
-                    event_type = str(value)
-                    break
+            if parsed.get("error") not in (None, "", False):
+                event_type = "error"
+            else:
+                for key in ("event", "type", "step_type", "step_name", "source"):
+                    value = parsed.get(key)
+                    if value not in (None, ""):
+                        event_type = str(value)
+                        break
         else:
             event_type = "message"
         return [StreamEvent(event_type=event_type, data=data, json_data=parsed)]
@@ -328,6 +331,7 @@ def build_builtin_targets(environ: Mapping[str, str] | None = None) -> dict[str,
         name="events",
         path=maxkb_path,
         protocol="sse",
+        headers={"Accept": "*/*"},
         body={
             "model": env.get("MAXKB_MODEL", "maxkb"),
             "messages": [{"role": "user", "content": question}],
@@ -621,20 +625,101 @@ def _read_response_chunk(response: Any, size: int) -> bytes:
     return response.read(size)
 
 
+def _is_error_event(event_type: str) -> bool:
+    normalized = re.sub(r"[\s-]+", "_", str(event_type).strip().casefold())
+    return normalized in {"error", "failed", "failure"} or normalized.endswith(
+        ("_error", "_failed", "_failure")
+    )
+
+
+def _count_error_events(event_type_counts: Mapping[str, Any]) -> int:
+    return sum(
+        int(count or 0)
+        for event_type, count in event_type_counts.items()
+        if _is_error_event(event_type)
+    )
+
+
+def _is_application_error_event(event: StreamEvent) -> bool:
+    if _is_error_event(event.event_type):
+        return True
+    payload = event.json_data
+    if not isinstance(payload, Mapping):
+        return False
+    if payload.get("error") not in (None, "", False):
+        return True
+    result = payload.get("result")
+    if isinstance(result, Mapping):
+        status = result.get("status")
+        state = str(status.get("state") or "").strip().casefold() if isinstance(status, Mapping) else ""
+        if result.get("final") is True and state in {"failed", "canceled", "cancelled", "rejected"}:
+            return True
+    data = payload.get("data")
+    if not isinstance(data, Mapping):
+        return False
+    status = str(data.get("status") or "").strip().casefold()
+    return status in {"error", "failed", "failure"} or data.get("error") not in (
+        None,
+        "",
+        False,
+    )
+
+
+def _terminal_event_state(event: StreamEvent) -> str | None:
+    """Return success/failure for the four products' native SSE terminators."""
+
+    if event.data.strip() == "[DONE]":
+        return "success"
+    event_type = str(event.event_type).strip().casefold().replace("-", "_")
+    payload = event.json_data
+    if event_type in {"complete", "message_end", "workflowduration"}:
+        return "success"
+    if event_type == "workflow_finished" and isinstance(payload, Mapping):
+        data = payload.get("data")
+        status = str(data.get("status") or "").strip().casefold() if isinstance(data, Mapping) else ""
+        return "success" if status in {"succeeded", "success", "completed"} else "failure"
+    if isinstance(payload, Mapping):
+        choices = payload.get("choices")
+        if isinstance(choices, list) and any(
+            isinstance(choice, Mapping) and choice.get("finish_reason") not in (None, "")
+            for choice in choices
+        ):
+            return "success"
+        result = payload.get("result")
+        if isinstance(result, Mapping) and result.get("kind") == "status-update" and result.get("final") is True:
+            status = result.get("status")
+            state = str(status.get("state") or "").strip().casefold() if isinstance(status, Mapping) else ""
+            return "success" if state == "completed" else "failure"
+    return None
+
+
 class _InFlight:
     def __init__(self) -> None:
         self._lock = Lock()
         self.current = 0
         self.peak = 0
+        self._last_change = time.perf_counter()
+        self._area = 0.0
+
+    def _advance(self, now: float) -> None:
+        self._area += self.current * (now - self._last_change)
+        self._last_change = now
 
     def enter(self) -> None:
         with self._lock:
+            self._advance(time.perf_counter())
             self.current += 1
             self.peak = max(self.peak, self.current)
 
     def leave(self) -> None:
         with self._lock:
+            self._advance(time.perf_counter())
             self.current = max(0, self.current - 1)
+
+    def average(self, elapsed_s: float) -> float:
+        with self._lock:
+            self._advance(time.perf_counter())
+            return self._area / max(elapsed_s, 0.000001)
 
 
 def measure_request(
@@ -655,8 +740,12 @@ def measure_request(
     bytes_received = 0
     events = 0
     event_type_counts: Counter[str] = Counter()
+    application_error_events = 0
+    terminal_success_events = 0
+    terminal_failure_events = 0
     error: str | None = None
     connection: HTTPConnection | HTTPSConnection | None = None
+    protocol = scenario.protocol
     try:
         api_key, _ = target.resolve_api_key(environ)
         scheme, host, port, request_target = _join_request_url(
@@ -664,10 +753,16 @@ def measure_request(
         )
         connection_cls = HTTPSConnection if scheme == "https" else HTTPConnection
         connection = connection_cls(host, port=port, timeout=timeout_s)
-        headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
-        headers.update({str(key): str(value) for key, value in scenario.headers.items()})
-        if scenario.protocol == "sse":
-            headers["Accept"] = "text/event-stream"
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "text/event-stream" if protocol == "sse" else "*/*",
+        }
+        headers.update(
+            {
+                str(key): str(render_template(value, environ, request_id))
+                for key, value in scenario.headers.items()
+            }
+        )
         body_value = render_template(scenario.body, environ, request_id)
         body: bytes | None
         if body_value is None:
@@ -694,7 +789,6 @@ def measure_request(
         response = connection.getresponse()
         status_code = int(response.status)
         content_type = response.getheader("Content-Type", "") or ""
-        protocol = scenario.protocol
         if protocol == "auto":
             protocol = "sse" if "text/event-stream" in content_type.lower() else "json"
 
@@ -714,11 +808,19 @@ def measure_request(
                 for event in parser.feed(chunk):
                     events += 1
                     event_type_counts[event.event_type] += 1
+                    application_error_events += int(_is_application_error_event(event))
+                    terminal_state = _terminal_event_state(event)
+                    terminal_success_events += int(terminal_state == "success")
+                    terminal_failure_events += int(terminal_state == "failure")
                     if first_event_ms is None:
                         first_event_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
             for event in parser.finish():
                 events += 1
                 event_type_counts[event.event_type] += 1
+                application_error_events += int(_is_application_error_event(event))
+                terminal_state = _terminal_event_state(event)
+                terminal_success_events += int(terminal_state == "success")
+                terminal_failure_events += int(terminal_state == "failure")
                 if first_event_ms is None:
                     first_event_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
         else:
@@ -729,7 +831,6 @@ def measure_request(
                 bytes_received += len(chunk)
                 if first_byte_ms is None:
                     first_byte_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
-                    first_event_ms = first_byte_ms
                     events = 1
                     event_type_counts["response"] = 1
     except Exception as exc:  # transport errors must become samples, not abort the run
@@ -739,12 +840,33 @@ def measure_request(
             connection.close()
 
     total_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
+    transport_success = (
+        error is None and status_code is not None and 200 <= status_code < 300
+    )
+    application_error = None
+    if transport_success and protocol == "sse":
+        if events == 0:
+            application_error = "empty_sse_stream"
+        elif terminal_failure_events:
+            application_error = "terminal_failure"
+        elif terminal_success_events == 0:
+            application_error = "incomplete_sse_stream"
     return {
         "request_id": request_id,
         "worker_id": worker_id,
         "request_index": request_index,
         "status_code": status_code,
-        "success": error is None and status_code is not None and 200 <= status_code < 300,
+        "success": (
+            transport_success
+            and application_error_events == 0
+            and application_error is None
+        ),
+        "transport_success": transport_success,
+        "application_error_events": application_error_events,
+        "application_error": application_error,
+        "terminal_success_events": terminal_success_events,
+        "terminal_failure_events": terminal_failure_events,
+        "protocol": protocol,
         "events": events,
         "event_type_counts": dict(event_type_counts),
         "first_byte_ms": round(first_byte_ms, 3) if first_byte_ms is not None else None,
@@ -770,12 +892,21 @@ def _percentile(values: Sequence[float], percentile: float) -> float | None:
 def _distribution(values: Iterable[float]) -> dict[str, float | int | None]:
     values_list = [float(value) for value in values]
     if not values_list:
-        return {"count": 0, "min": None, "avg": None, "p50": None, "p95": None, "max": None}
+        return {
+            "count": 0,
+            "min": None,
+            "avg": None,
+            "p50": None,
+            "p90": None,
+            "p95": None,
+            "max": None,
+        }
     return {
         "count": len(values_list),
         "min": round(min(values_list), 3),
         "avg": round(statistics.mean(values_list), 3),
         "p50": _percentile(values_list, 0.50),
+        "p90": _percentile(values_list, 0.90),
         "p95": _percentile(values_list, 0.95),
         "max": round(max(values_list), 3),
     }
@@ -786,37 +917,89 @@ def summarize_samples(
     elapsed_s: float,
     configured_connections: int,
     peak_in_flight: int | None = None,
+    average_in_flight: float | None = None,
 ) -> dict[str, Any]:
     """Aggregate samples into report-ready QPS/throughput/latency metrics."""
 
     elapsed = max(float(elapsed_s), 0.000001)
-    successes = [sample for sample in samples if bool(sample.get("success"))]
+    application_error_counts = [
+        int(sample.get("application_error_events", 0) or 0)
+        or _count_error_events(sample.get("event_type_counts") or {})
+        for sample in samples
+    ]
+    successes = [
+        sample
+        for sample, application_errors in zip(samples, application_error_counts)
+        if bool(sample.get("success")) and application_errors == 0
+    ]
+    transport_successes = [
+        sample
+        for sample in samples
+        if bool(sample.get("transport_success", sample.get("success")))
+    ]
     errors = len(samples) - len(successes)
     event_count = sum(int(sample.get("events", 0) or 0) for sample in samples)
+    event_type_counts: Counter[str] = Counter()
+    for sample in samples:
+        event_type_counts.update(sample.get("event_type_counts") or {})
+    application_error_requests = sum(
+        1
+        for sample, count in zip(samples, application_error_counts)
+        if count or sample.get("application_error")
+    )
     stream_seconds = sum(float(sample.get("stream_ms", 0) or 0) for sample in samples) / 1000
-    ttfe_values = [
-        float(sample["first_event_ms"])
+    protocols = {
+        str(sample.get("protocol"))
+        for sample in samples
+        if sample.get("protocol") not in (None, "")
+    }
+    protocol = next(iter(protocols)) if len(protocols) == 1 else ("mixed" if protocols else None)
+    ttfb_values = [
+        float(sample["first_byte_ms"])
         for sample in successes
-        if sample.get("first_event_ms") is not None
+        if sample.get("first_byte_ms") is not None
     ]
+    ttfe_values = (
+        [
+            float(sample["first_event_ms"])
+            for sample in successes
+            if sample.get("first_event_ms") is not None
+        ]
+        if protocol == "sse"
+        else []
+    )
     latency_values = [
         float(sample["total_ms"])
         for sample in successes
         if sample.get("total_ms") is not None
     ]
-    event_rate = event_count / stream_seconds if stream_seconds > 0 else 0.0
+    response_bytes = [float(sample.get("bytes_received", 0) or 0) for sample in successes]
+    bytes_received = sum(int(sample.get("bytes_received", 0) or 0) for sample in samples)
+    is_sse = protocol == "sse"
+    event_rate = event_count / stream_seconds if is_sse and stream_seconds > 0 else None
     return {
         "requests": len(samples),
         "successes": len(successes),
         "errors": errors,
+        "transport_successes": len(transport_successes),
+        "transport_errors": len(samples) - len(transport_successes),
+        "application_error_requests": application_error_requests,
+        "success_rate": round(len(successes) / len(samples), 4) if samples else 0.0,
         "events": event_count,
+        "event_type_counts": dict(event_type_counts),
         "qps": round(len(successes) / elapsed, 3),
-        "event_throughput_events_per_s": round(event_count / elapsed, 3),
-        "stream_event_rate_events_per_s": round(event_rate, 3),
+        "event_throughput_events_per_s": round(event_count / elapsed, 3) if is_sse else None,
+        "stream_event_rate_events_per_s": round(event_rate, 3) if event_rate is not None else None,
+        "bytes_received": bytes_received,
+        "byte_throughput_bytes_per_s": round(bytes_received / elapsed, 3),
+        "response_bytes": _distribution(response_bytes),
+        "protocol": protocol,
         "configured_connections": configured_connections,
         "connections": configured_connections,
         "peak_in_flight": peak_in_flight if peak_in_flight is not None else configured_connections,
+        "average_in_flight": round(average_in_flight, 3) if average_in_flight is not None else None,
         "connection_mode": "fresh-per-request",
+        "ttfb_ms": _distribution(ttfb_values),
         "ttfe_ms": _distribution(ttfe_values),
         "latency_ms": _distribution(latency_values),
     }
@@ -831,7 +1014,7 @@ def _run_window(
     environ: Mapping[str, str],
     max_requests: int | None,
     worker_record: bool,
-) -> tuple[float, list[dict[str, Any]], int]:
+) -> tuple[float, list[dict[str, Any]], int, float]:
     started = time.perf_counter()
     deadline = started + duration_s
     tracker = _InFlight()
@@ -875,7 +1058,7 @@ def _run_window(
         for future in futures:
             future.result()
     elapsed = max(time.perf_counter() - started, 0.000001)
-    return elapsed, samples, tracker.peak
+    return elapsed, samples, tracker.peak, tracker.average(elapsed)
 
 
 def _unsupported_result(
@@ -895,11 +1078,14 @@ def _unsupported_result(
         "successes": 0,
         "errors": 0,
         "events": 0,
+        "protocol": scenario.protocol,
         "qps": None,
         "event_throughput_events_per_s": None,
         "stream_event_rate_events_per_s": None,
         "peak_in_flight": 0,
+        "average_in_flight": 0.0,
         "connection_mode": "fresh-per-request",
+        "ttfb_ms": _distribution([]),
         "ttfe_ms": _distribution([]),
         "latency_ms": _distribution([]),
     }
@@ -974,7 +1160,7 @@ def run_benchmark(
                         max_requests=None,
                         worker_record=False,
                     )
-                elapsed, samples, peak = _run_window(
+                elapsed, samples, peak, average = _run_window(
                     target,
                     scenario,
                     connections,
@@ -984,7 +1170,7 @@ def run_benchmark(
                     max_requests=max_requests,
                     worker_record=True,
                 )
-                summary = summarize_samples(samples, elapsed, connections, peak)
+                summary = summarize_samples(samples, elapsed, connections, peak, average)
                 summary.update(
                     {
                         "target": target.name,
@@ -1086,23 +1272,36 @@ def write_markdown_report(report: Mapping[str, Any], path: str | Path) -> None:
     lines = [
         "# RAG API Benchmark",
         "",
-        "指标定义：`Event Throughput = events / 测量窗口秒数`；`TTFE` 为首次完整事件的延迟；",
-        "`QPS = 成功请求数 / 测量窗口秒数`。当前 HTTP 模式为每次请求新建连接，`connections` 表示并发请求数。",
+        "指标定义：`QPS = 应用成功请求数 / 测量窗口秒数`；`TTFB` 为首个响应字节；`TTFE` 仅用于首次完整 SSE 事件。",
+        "`Events/s` 是产品原生 SSE 分帧率，只能作同一产品/协议内诊断。当前每次请求新建连接，因此延迟包含连接建立开销。",
         "",
-        "| Platform | Scenario | Connections | Status | Events/s | TTFE p50 (ms) | QPS | Success/Requests |",
-        "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: |",
+        "| Platform | Scenario | Protocol | Connections cfg/peak/avg | Status | QPS | TTFB p50/p95 (ms) | TTFE p50/p95 (ms) | End-to-end p50/p95 (ms) | Events/s* | App errors | Success/Requests |",
+        "| --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in report.get("results", []):
+        ttfb = row.get("ttfb_ms", {}) or {}
         ttfe = row.get("ttfe_ms", {}) or {}
+        latency = row.get("latency_ms", {}) or {}
         lines.append(
-            "| {target} | {scenario} | {connections} | {status} | {throughput} | {ttfe} | {qps} | {success}/{requests} |".format(
+            "| {target} | {scenario} | {protocol} | {connections} | {status} | {qps} | {ttfb50}/{ttfb95} | {ttfe50}/{ttfe95} | {latency50}/{latency95} | {throughput} | {app_errors} | {success}/{requests} |".format(
                 target=row.get("target", "-"),
                 scenario=row.get("scenario", "-"),
-                connections=row.get("connections", "-"),
+                protocol=row.get("protocol", "-"),
+                connections="{}/{}/{}".format(
+                    row.get("connections", "-"),
+                    row.get("peak_in_flight", "-"),
+                    _format_value(row.get("average_in_flight")),
+                ),
                 status=row.get("status", "-"),
-                throughput=_format_value(row.get("event_throughput_events_per_s")),
-                ttfe=_format_value(ttfe.get("p50")),
                 qps=_format_value(row.get("qps")),
+                ttfb50=_format_value(ttfb.get("p50")),
+                ttfb95=_format_value(ttfb.get("p95")),
+                ttfe50=_format_value(ttfe.get("p50")),
+                ttfe95=_format_value(ttfe.get("p95")),
+                latency50=_format_value(latency.get("p50")),
+                latency95=_format_value(latency.get("p95")),
+                throughput=_format_value(row.get("event_throughput_events_per_s")),
+                app_errors=row.get("application_error_requests", 0),
                 success=row.get("successes", 0),
                 requests=row.get("requests", 0),
             )

@@ -7,9 +7,8 @@ ledgers.  This module consumes those immutable artifacts plus one frozen
 boundary:
 
 * it never downloads a dataset or an image;
-* it admits only Qianfan ``deepseek-v4-flash`` and
-  ``qwen3.5-35b-a3b`` for judging, and MaaS ``bge-m3`` only as a recorded
-  optional exact-metric dependency;
+* it admits only the frozen DeepSeek OpenAI-compatible
+  ``deepseek-v4-flash`` text judge using ``DEEPSEEK_API_KEY_NEW``;
 * it creates its own hashed start record and denominator before the first
   judge request;
 * retries stay inside one judge unit and a terminal ledger row is appended
@@ -57,24 +56,72 @@ except ImportError:  # pragma: no cover - the normal checkout has the helper
     Progress = None  # type: ignore[assignment,misc]
     _shared_redact = None
 
+from competitor_eval_metric_registry import (  # noqa: E402
+    normalize_structured_gold,
+    structured_gold_complete,
+)
+
 
 SCHEMA = "competitor-eval-judge-v1"
 RESPONSE_SCHEMA = "competitor-eval-judge-response-v1"
 PACKAGE_SCHEMA = "competitor-eval-ready-v1"
 TEXT_JUDGE_MODEL = "deepseek-v4-flash"
-MULTIMODAL_JUDGE_MODEL = "qwen3.5-35b-a3b"
+JUDGE_MODEL_VERSION = "deepseek-v4-flash"
 EMBEDDING_MODEL = "bge-m3"
-EMBEDDING_PROVIDER = "huawei-maas"
-QIANFAN_PROVIDER = "qianfan"
-DEFAULT_QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2"
-DEFAULT_MAAS_BASE_URL = "https://api.modelarts-maas.com/v1"
+EMBEDDING_PROVIDER = "maas"
+JUDGE_PROVIDER = "deepseek-official"
+JUDGE_API_KEY_ENV = "DEEPSEEK_API_KEY_NEW"
+DEFAULT_JUDGE_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_HOST = "api.deepseek.com"
+MIXED_DATASET_ID = "moi-rag-bench-v0.1-text-only-no-mllm"
+TEXT_ONLY_READINESS_SMOKE_DATASET_ID = "moi-rag-bench-v0.1-text-only-no-mllm-readiness-smoke"
+LEGACY_MIXED_DATASET_IDS = (
+    "moi-rag-bench-v0.1-ready-for-eval",
+    "moi-rag-bench-v0.1-mixed",
+    "moi-rag-bench-v0.2",
+    "moi-rag-bench-v0.2-ready-for-eval",
+    "moi-rag-bench-v0.2-text-only-no-mllm",
+    "moi-rag-bench-v0.3-final",
+    "moi-rag-bench-v0.3-final-ready-for-eval",
+    "moi-rag-bench-v0.3-final-text-only-no-mllm",
+    "moi-rag-bench-v0.3.1-qa-revision",
+    "moi-rag-bench-v0.3.1-new-qa-increment",
+)
+MIXED_RUBRIC_VERSION = "moi-rag-bench-v0.1-adapted-reference-rubric-v1"
+PROMPT_VERSION = "moi-rag-bench-v0.1-judge-prompt-v1"
+TEXT_ONLY_CONDITION = "text-only-no-mllm"
 RAGAS_COMPATIBLE_JUDGE = "RAGAS_COMPATIBLE_JUDGE"
 RAGAS_EXACT = "RAGAS_EXACT_0.2.15"
 DEFAULT_CONCURRENCY = 1
 DEFAULT_RETRIES = 2
 DEFAULT_TIMEOUT = 180.0
 EXCLUDED_DATASETS = frozenset({"omnidocbench", "omnidocbench-bench", "lenovo", "lenovo-bench"})
-TAAS_MARKERS = ("taas", "matrixorigin")
+# The Huawei MaaS Dify plugin is namespaced under ``matrixorigin`` too.  Only
+# reject retired/non-MaaS provider or model identifiers, not every
+# MatrixOrigin-owned provider string encountered in a local run record.
+TAAS_MARKERS = (
+    "taas",
+    "matrixorigin_taas",
+    "matrixorigin.cn",
+    "qianfan",
+    "baidubce",
+    "qwen",
+)
+
+
+def _valid_judge_base_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(str(value or "").strip())
+        port = parsed.port
+    except ValueError:
+        return False
+    return bool(
+        parsed.scheme.casefold() == "https"
+        and (parsed.hostname or "").casefold() == DEEPSEEK_HOST
+        and port in (None, 443)
+        and not parsed.username
+        and not parsed.password
+    )
 FAILURE_STATUSES = frozenset(
     {
         "FAILED",
@@ -123,6 +170,92 @@ DATASET_ALIASES = {
     "omni-doc-bench": "omnidocbench",
     "lenovo": "lenovo-bench",
     "lenovo-bench": "lenovo-bench",
+    MIXED_DATASET_ID: MIXED_DATASET_ID,
+    TEXT_ONLY_READINESS_SMOKE_DATASET_ID: MIXED_DATASET_ID,
+    **{legacy_id: MIXED_DATASET_ID for legacy_id in LEGACY_MIXED_DATASET_IDS},
+}
+
+
+MIXED_DIMENSION_NAMES = (
+    "response_claim_correctness",
+    "reference_claim_recall",
+    "critical_claim_coverage",
+    "gold_evidence_support",
+    "runtime_context_faithfulness",
+    "strict_unanswerable",
+    "false_refusal",
+    "answer_relevance",
+    "instruction_compliance",
+    "contradiction_free",
+    "unsupported_claim_rate",
+)
+MIXED_CANONICAL_DIMENSION_NAMES = frozenset(
+    {
+        "reference_claim_recall",
+        "critical_claim_coverage",
+        "gold_evidence_support",
+    }
+)
+MIXED_ANSWERABLE_ONLY_DIMENSION_NAMES = frozenset(
+    {
+        "response_claim_correctness",
+        "reference_claim_recall",
+        "critical_claim_coverage",
+        "gold_evidence_support",
+        "runtime_context_faithfulness",
+        "false_refusal",
+    }
+)
+MIXED_UNANSWERABLE_ONLY_DIMENSION_NAMES = frozenset({"strict_unanswerable"})
+
+MIXED_SOURCE_ALIASES = {
+    "docbench": "docbench",
+    "doc-bench": "docbench",
+    "enterprise": "enterprise",
+    "enterprise-rag-bench": "enterprise",
+    "enterpriserag-bench": "enterprise",
+    "multihop": "multihop",
+    "multi-hop": "multihop",
+    "multihop-rag": "multihop",
+    "mmdocir": "mmdocir",
+    "mm-doc-ir": "mmdocir",
+}
+
+MIXED_RUBRICS = {
+    "docbench": {
+        "answerable": "DocBench adapted text-projection correctness; metadata and text-only questions use the frozen reference/evidence, while multimodal-text-projection remains non-visual.",
+        "unanswerable": "DocBench adapted text-projection strict refusal; do not treat missing reference text as an answer.",
+        "question_types": {
+            "metadata": "Prefer exact metadata facts and do not infer absent page/layout fields.",
+            "multimodal": "Judge only the supplied text projection; never claim native visual understanding.",
+            "multimodal-t": "Judge only the supplied text projection; never claim native visual understanding.",
+        },
+    },
+    "enterprise": {
+        "answerable": "Enterprise adapted correctness/completeness; preserve source scope and conflict/constrained facts.",
+        "unanswerable": "Enterprise adapted info-not-found/strict refusal; no guessed enterprise fact.",
+        "question_types": {
+            "conflict": "Resolve only explicit frozen evidence; mark contradictions instead of smoothing them away.",
+            "constrained": "Follow requested constraints and report omissions.",
+        },
+    },
+    "multihop": {
+        "answerable": "MultiHop adapted multi-evidence correctness; require all stated hops when structured Gold is available.",
+        "unanswerable": "MultiHop adapted null/strict refusal; do not complete an absent hop from prior knowledge.",
+        "question_types": {
+            "comparison": "Check both sides of the comparison and preserve the requested relation.",
+            "inference": "Check the inference chain against supplied evidence only.",
+            "temporal": "Check dates and temporal direction explicitly.",
+        },
+    },
+    "mmdocir": {
+        "answerable": "MMDocIR adapted QA correctness over the text projection; retrieval/page/layout claims require explicit trace.",
+        "unanswerable": "MMDocIR adapted non-answer/refusal; absence of a reference answer is not permission to guess.",
+        "question_types": {
+            "text-only": "Check the answer against the available text evidence.",
+            "single_doc_single_evidence": "Check the single document/evidence relation without inventing page trace.",
+        },
+    },
 }
 
 
@@ -289,7 +422,7 @@ def _as_list(value: Any) -> list[Any]:
         return []
     if isinstance(value, list):
         return list(value)
-    if isinstance(value, tuple | set):
+    if isinstance(value, (tuple, set)):
         return list(value)
     return [value]
 
@@ -356,6 +489,12 @@ def _content_from_chat_response(payload: Any) -> Any:
             if key in payload and isinstance(payload[key], (str, Mapping, list)):
                 return payload[key]
     return payload
+
+
+def _usage_from_chat_response(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, Mapping) and isinstance(payload.get("usage"), Mapping):
+        return {str(key): value for key, value in payload["usage"].items()}
+    return {}
 
 
 def _finite_number(value: Any) -> bool:
@@ -470,6 +609,57 @@ def _contracts() -> dict[str, dict[str, Any]]:
             "context_operating_point": "read from the completed run/package; never selected from scores",
             "embedding": {"required": False, "provider": EMBEDDING_PROVIDER, "model": EMBEDDING_MODEL, "only_if_exact_metric": True},
         },
+        MIXED_DATASET_ID: {
+            "dataset": "MOI RAG Benchmark v0.1",
+            "protocol_tag": "ADAPTED_REFERENCE_RUBRIC",
+            "implementation": "pure-text MaaS judge with source/question-type/answerability frozen routing; canonical claim gates are N/A when Gold lacks structured claims",
+            "dimensions": {
+                name: _dimension(
+                    name,
+                    1,
+                    requires=(
+                        ("actual_context",)
+                        if name == "runtime_context_faithfulness"
+                        else ("gold_evidence",)
+                        if name == "gold_evidence_support"
+                        else ("structured_reference_claims",)
+                        if name == "critical_claim_coverage"
+                        else ()
+                    ),
+                    description=(
+                        "Frozen response-claim correctness label aggregate."
+                        if name == "response_claim_correctness"
+                        else "Reference-answer claim coverage diagnostic; canonical only when structured Gold claims exist."
+                        if name == "reference_claim_recall"
+                        else "Critical required claim gate; N/A without structured Gold critical claims."
+                        if name == "critical_claim_coverage"
+                        else "Response factual claims supported by frozen Gold evidence."
+                        if name == "gold_evidence_support"
+                        else "Faithfulness to explicit runtime retrieval trace only."
+                        if name == "runtime_context_faithfulness"
+                        else "Strict refusal success on frozen unanswerable items."
+                        if name == "strict_unanswerable"
+                        else "Absence of false refusal on answerable items."
+                        if name == "false_refusal"
+                        else "Directly answers the user question."
+                        if name == "answer_relevance"
+                        else "Follows frozen question/task instructions."
+                        if name == "instruction_compliance"
+                        else "No material contradiction in the response."
+                        if name == "contradiction_free"
+                        else "Unsupported response-claim diagnostic; lower raw rate is better, score is one minus rate."
+                    ),
+                )
+                for name in MIXED_DIMENSION_NAMES
+            },
+            "rubric_version": MIXED_RUBRIC_VERSION,
+            "rubric_by": ["source_dataset", "question_type", "answerability"],
+            "rubric_mode": "ADAPTED_REFERENCE_RUBRIC",
+            "rubric_routes": MIXED_RUBRICS,
+            "slices": ["source_dataset", "question_type", "answerability"],
+            "embedding": {"required": False, "provider": EMBEDDING_PROVIDER, "model": EMBEDDING_MODEL, "only_if_exact_metric": True},
+            "canonical_claim_gate": "N/A when scored_reference_claims, critical_required_claims, or evidence_sets are absent",
+        },
     }
 
 
@@ -553,6 +743,8 @@ def judge_response_schema(dataset: str) -> dict[str, Any]:
             "question_id": {"type": "string", "minLength": 1},
             "dimensions": {"type": "object", "additionalProperties": False, "required": required, "properties": dimensions},
             "overall": {"type": ["number", "null"], "minimum": 0, "maximum": max(_scale_max(spec) for spec in contract["dimensions"].values())},
+            "response_claims": {"type": "array", "items": {"type": "object"}},
+            "adaptation": {"type": "object"},
         },
     }
 
@@ -720,6 +912,72 @@ def _spec_from_manifest(manifest: Mapping[str, Any], names: Sequence[str], defau
     return default
 
 
+def _validate_declared_counts(
+    manifest: Mapping[str, Any],
+    actual: Mapping[str, int],
+    *,
+    error_prefix: str = "PACKAGE",
+) -> None:
+    """Treat declared package counts as an admission check when present."""
+
+    declared = manifest.get("counts")
+    if not isinstance(declared, Mapping):
+        return
+    for key, observed in actual.items():
+        if key not in declared:
+            continue
+        value = declared[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise PackageError(f"{error_prefix}_DECLARED_COUNT_INVALID:{key}")
+        if value != observed:
+            raise PackageError(
+                f"{error_prefix}_COUNT_MISMATCH:{key}:declared={value}:actual={observed}"
+            )
+
+
+def _validate_text_only_condition(
+    manifest: Mapping[str, Any],
+    condition_manifest: Mapping[str, Any],
+    *,
+    questions: Sequence[Mapping[str, Any]],
+    corpus: Sequence[Mapping[str, Any]],
+) -> None:
+    """Reject vision/media inputs from the pure-text Judge path."""
+
+    def value(name: str, default: Any = None) -> Any:
+        if condition_manifest.get(name) is not None:
+            return condition_manifest[name]
+        return manifest.get(name, default)
+
+    if value("mllm_required") is not False:
+        raise PackageError("TEXT_ONLY_MLLM_REQUIRED_MUST_BE_FALSE")
+    if str(value("image_llm", "")).strip().upper() != "NOT_APPLICABLE":
+        raise PackageError("TEXT_ONLY_IMAGE_LLM_MUST_BE_NOT_APPLICABLE")
+
+    for row in corpus:
+        explicit_media = [
+            row.get("media"),
+            row.get("modality"),
+            row.get("media_type"),
+            row.get("mime_type"),
+        ]
+        media_text = " ".join(str(item).casefold() for item in explicit_media if item not in (None, ""))
+        if "image" in media_text or "audio" in media_text or "video" in media_text:
+            raise PackageError("TEXT_ONLY_CORPUS_MEDIA_UNSUPPORTED")
+
+    for row in questions:
+        image_values = row.get("images", row.get("image_paths", row.get("image_path")))
+        if any(str(item).strip() for item in _as_list(image_values) if item not in (None, "")):
+            raise PackageError("TEXT_ONLY_QUESTION_IMAGE_INPUT_UNSUPPORTED")
+        media_text = " ".join(
+            str(item).casefold()
+            for item in (row.get("media"), row.get("modality"))
+            if item not in (None, "")
+        )
+        if "image" in media_text or "audio" in media_text or "video" in media_text:
+            raise PackageError("TEXT_ONLY_QUESTION_MEDIA_UNSUPPORTED")
+
+
 def load_condition_package(package: str | Path, *, condition: str | None = None, exact_ragas: bool = False) -> ConditionPackage:
     root, manifest_path = _manifest_path(Path(package))
     raw = _read_json(manifest_path)
@@ -794,7 +1052,13 @@ def load_condition_package(package: str | Path, *, condition: str | None = None,
     corpus, corpus_source = _records_from_spec(root, corpus_spec, "corpus")
     gold, gold_source = ([], None) if gold_spec is None else _records_from_spec(root, gold_spec, "gold")
     normalized_questions: list[dict[str, Any]] = []
-    gold_by_id = {str(row.get("question_id", row.get("id", ""))): row for row in gold}
+    gold_by_id: dict[str, dict[str, Any]] = {}
+    for ordinal, row in enumerate(gold, 1):
+        gold_id = str(row.get("question_id", row.get("id", "")))
+        if gold_id and gold_id in gold_by_id:
+            raise PackageError(f"PACKAGE_GOLD_ID_DUPLICATE:{gold_id}")
+        if gold_id:
+            gold_by_id[gold_id] = row
     seen: set[str] = set()
     for ordinal, question in enumerate(questions, 1):
         qid = str(question.get("question_id", question.get("id", question.get("qid", f"question-{ordinal:04d}"))))
@@ -807,11 +1071,23 @@ def load_condition_package(package: str | Path, *, condition: str | None = None,
         merged["question"] = str(_first(merged, "question", "query", "text", default=""))
         if not merged["question"].strip():
             raise PackageError(f"PACKAGE_QUESTION_TEXT_MISSING:{qid}")
-        normalized_questions.append(merged)
+        normalized_questions.append(normalize_structured_gold(merged))
     if not normalized_questions:
         raise PackageError("PACKAGE_QUESTIONS_EMPTY")
     if not corpus:
         raise PackageError("PACKAGE_CORPUS_EMPTY")
+    count_manifest = condition_manifest if isinstance(condition_manifest.get("counts"), Mapping) else manifest
+    _validate_declared_counts(
+        count_manifest,
+        {"documents": len(corpus), "questions": len(normalized_questions), "gold": len(gold)},
+    )
+    if selected_name == "text-only-no-mllm":
+        _validate_text_only_condition(
+            manifest,
+            condition_manifest,
+            questions=normalized_questions,
+            corpus=corpus,
+        )
     revision = str(_first(condition_manifest, "revision", "dataset_revision", "package_revision", default=_first(manifest, "revision", "dataset_revision", "package_revision", "UNKNOWN")))
     split = str(_first(condition_manifest, "split", default=_first(manifest, "split", "UNKNOWN")))
     hashes: dict[str, str] = {"manifest": _hash_file(manifest_path)}
@@ -879,7 +1155,7 @@ class RunnerRun:
         return self._by_stage("retrieval")
 
 
-def load_runner_run(run_dir: str | Path) -> RunnerRun:
+def load_runner_run(run_dir: str | Path, *, allow_incomplete: bool = False) -> RunnerRun:
     root = Path(run_dir).expanduser().resolve()
     if not root.is_dir():
         raise RunError(f"RUN_NOT_FOUND:{root}")
@@ -893,11 +1169,11 @@ def load_runner_run(run_dir: str | Path) -> RunnerRun:
     terminal = _read_jsonl(terminal_path)
     summary_value = _read_json(root / "summary.json") if (root / "summary.json").exists() else {}
     summary = dict(summary_value) if isinstance(summary_value, Mapping) else {}
-    if str(summary.get("status", "")).upper() in {"DRY_RUN", "ERROR"}:
+    if not allow_incomplete and str(summary.get("status", "")).upper() in {"DRY_RUN", "ERROR"}:
         raise RunError(f"RUN_NOT_COMPLETED:{summary.get('status')}")
     if not initial:
         raise RunError("RUN_INITIAL_LEDGER_EMPTY")
-    if not any(row.get("stage") == "qa" for row in terminal):
+    if not allow_incomplete and not any(row.get("stage") == "qa" for row in terminal):
         # An explicit QA failure row is still a completed input.  Requiring a
         # QA stage prevents accidentally judging a retrieval-only run.
         raise RunError("RUN_QA_TERMINAL_LEDGER_MISSING")
@@ -1062,6 +1338,75 @@ def _question_type(question: Mapping[str, Any]) -> str:
     return str(_first(question, "question_type", "type", "category", default="unknown"))
 
 
+def _source_dataset(question: Mapping[str, Any]) -> str:
+    raw = str(_first(question, "source_dataset", "source", "dataset", default="unknown") or "")
+    normalized = raw.strip().casefold().replace("_", "-").replace(" ", "-")
+    return MIXED_SOURCE_ALIASES.get(normalized, normalized or "unknown")
+
+
+def _answerability(question: Mapping[str, Any]) -> str:
+    raw = _first(question, "answerability", "answerable", default=True)
+    normalized = str(raw).strip().casefold().replace("_", "-").replace(" ", "-")
+    if normalized in {"false", "no", "negative", "unanswerable", "not-answerable"}:
+        return "unanswerable"
+    if normalized in {"unknown", "unclear", "indeterminate"}:
+        return "unknown"
+    return "answerable"
+
+
+def _structured_reference_claims(question: Mapping[str, Any]) -> list[Any]:
+    normalized = normalize_structured_gold(question)
+    value = normalized.get("scored_reference_claims")
+    return list(value) if isinstance(value, list) and value else []
+
+
+def _structured_critical_claims(question: Mapping[str, Any]) -> list[Any]:
+    normalized = normalize_structured_gold(question)
+    value = normalized.get("critical_claims")
+    return list(value) if isinstance(value, list) and value else []
+
+
+def _structured_evidence_sets(question: Mapping[str, Any]) -> list[Any]:
+    value = normalize_structured_gold(question).get("evidence_sets")
+    return list(value) if isinstance(value, list) and value else []
+
+
+def _canonical_claim_gold_available(question: Mapping[str, Any]) -> bool:
+    return structured_gold_complete(question)
+
+
+def select_frozen_rubric(question: Mapping[str, Any]) -> dict[str, Any]:
+    """Select the versioned mixed-benchmark rubric without inventing Gold claims."""
+
+    question = normalize_structured_gold(question)
+    source = _source_dataset(question)
+    question_type = _question_type(question).strip() or "unknown"
+    answerability = _answerability(question)
+    source_spec = MIXED_RUBRICS.get(source, {})
+    type_spec = source_spec.get("question_types", {}) if isinstance(source_spec, Mapping) else {}
+    type_key = question_type.casefold().replace("_", "-").replace(" ", "-")
+    instruction = type_spec.get(type_key) or source_spec.get(answerability) or (
+        "Use only the frozen question, reference answer, Gold evidence, and explicit runtime trace."
+    )
+    mode = "CANONICAL_CLAIM_RUBRIC" if _canonical_claim_gold_available(question) else "ADAPTED_REFERENCE_RUBRIC"
+    return {
+        "rubric_version": MIXED_RUBRIC_VERSION,
+        "rubric_id": f"{MIXED_RUBRIC_VERSION}:{source}:{question_type}:{answerability}",
+        "source_dataset": source,
+        "question_type": question_type,
+        "answerability": answerability,
+        "mode": mode,
+        "instruction": instruction,
+        "canonical_claims_available": _canonical_claim_gold_available(question),
+        "reference_claims_available": bool(_structured_reference_claims(question)),
+        "critical_claims_available": bool(_structured_critical_claims(question)),
+        "evidence_sets_available": bool(_structured_evidence_sets(question)),
+    }
+
+
+frozen_rubric_for = select_frozen_rubric
+
+
 def _gold_evidence(question: Mapping[str, Any]) -> Any:
     for key in ("gold_evidence", "evidence", "gold_quotes", "quotes", "reference_evidence"):
         if key in question and question[key] not in (None, [], ""):
@@ -1156,7 +1501,7 @@ class JudgeStore:
             existing = _read_json(self.start_path)
             if not isinstance(existing, Mapping):
                 raise JudgeError("JUDGE_START_RECORD_INVALID")
-            compare_keys = ("schema", "source_run_id", "dataset", "condition", "data_hashes", "planned", "judge", "metric_contract")
+            compare_keys = ("schema", "source_run_id", "dataset", "condition", "evaluation_condition", "data_hashes", "planned", "judge", "metric_contract")
             for key in compare_keys:
                 if existing.get(key) != start_record.get(key):
                     raise JudgeError(f"JUDGE_START_RECORD_MISMATCH:{key}")
@@ -1183,6 +1528,10 @@ class JudgeStore:
                     "status": "not_started",
                     "planned_denominator": True,
                     "runner_status": unit.runner_status,
+                    "source_dataset": _source_dataset(unit.question),
+                    "question_type": _question_type(unit.question),
+                    "answerability": _answerability(unit.question),
+                    "rubric": select_frozen_rubric(unit.question),
                     "context_available": unit.context_available,
                     "gold_evidence_available": unit.gold_evidence_available,
                     "citations_available": unit.citations_available,
@@ -1240,6 +1589,7 @@ class JudgeStore:
             path,
             {
                 "schema": "competitor-eval-judge-raw-v1",
+                "redacted": True,
                 "question_id": unit.question_id,
                 "repeat_id": unit.repeat_id,
                 "attempt": attempt,
@@ -1258,7 +1608,7 @@ class _NoopProgress:
         return None
 
 
-class QianfanJudgeClient:
+class OpenAIJudgeClient:
     def __init__(
         self,
         *,
@@ -1298,26 +1648,29 @@ class QianfanJudgeClient:
                 timeout=self.timeout,
             )
         except Exception as exc:
-            raise ProviderError(f"QIANFAN_REQUEST_FAILED:{type(exc).__name__}:{exc}") from exc
+            raise ProviderError(f"DEEPSEEK_REQUEST_FAILED:{type(exc).__name__}:{exc}") from exc
 
 
-PROMPT_TEMPLATE = """You are the frozen benchmark judge. Return only one JSON object matching the supplied JSON Schema. Use temperature 0. Judge only the requested dimensions. Never invent context, citations, quotes, images, or document support: when an input marked unavailable is required by a dimension, return supported=false, score=null, and an explicit reason. Keep scores within each dimension's declared range.\n\nDataset contract:\n{contract}\n\nInput record:\n{input_record}\n\nRequired JSON Schema:\n{schema}\n"""
+PROMPT_TEMPLATE = """You are the frozen pure-text benchmark judge. Return only one JSON object matching the supplied JSON Schema. Use temperature 0 and the frozen rubric version. Judge only the requested dimensions. Never invent runtime context, citations, quotes, page/layout trace, Gold claims, critical claims, or document support. If a required trace or structured Gold field is unavailable, return supported=false, score=null, and an explicit N/A reason. The mixed package may use ADAPTED_REFERENCE_RUBRIC: an answer-level reference diagnostic must never be presented as canonical claim Gold. Keep scores within each dimension's declared range.\n\nDataset contract:\n{contract}\n\nInput record:\n{input_record}\n\nRequired JSON Schema:\n{schema}\n"""
 
 
 def _prompt_hash(dataset: str) -> str:
-    return _hash_value({"prompt_version": "judge-prompt-v1", "template": PROMPT_TEMPLATE, "dataset": metric_contract_for(dataset), "schema": judge_response_schema(dataset)})
+    return _hash_value({"prompt_version": PROMPT_VERSION, "template": PROMPT_TEMPLATE, "dataset": metric_contract_for(dataset), "schema": judge_response_schema(dataset)})
 
 
 def _judge_input(unit: JudgeUnit, package: ConditionPackage, runner: RunnerRun) -> dict[str, Any]:
     question = unit.question
     result: dict[str, Any] = {
         "dataset": package.dataset,
+        "dataset_id": package.dataset_id,
         "condition": package.condition,
+        "evaluation_condition": TEXT_ONLY_CONDITION if package.dataset_id == MIXED_DATASET_ID else package.condition,
         "question_id": unit.question_id,
+        "source_dataset": _source_dataset(question),
         "question_type": _question_type(question),
         "question": str(question.get("question", "")),
         "reference_answer": _gold_answer(question),
-        "answerability": question.get("answerability", "answerable" if question.get("answerable", True) else "unanswerable"),
+        "answerability": _answerability(question),
         "citation_required": question.get("citation_required"),
         "answer": unit.answer,
         "runner_status": unit.runner_status,
@@ -1325,9 +1678,23 @@ def _judge_input(unit: JudgeUnit, package: ConditionPackage, runner: RunnerRun) 
         "gold_evidence_available": unit.gold_evidence_available,
         "citations_available": unit.citations_available,
         "image_evidence_available": unit.image_evidence_available,
-        "gold_document_ids": question.get("gold_doc_ids", question.get("gold_document_ids", [])),
+        "gold_document_ids": _first(
+            question,
+            "gold_doc_ids",
+            "gold_document_ids",
+            "document_ids",
+            default=[],
+        ),
         "gold_evidence": unit.gold_evidence,
+        "rubric": select_frozen_rubric(question),
+        "reference_claim_mode": "canonical" if _canonical_claim_gold_available(question) else "adapted_reference_answer",
     }
+    normalized_gold = normalize_structured_gold(question)
+    for field in ("scored_reference_claims", "critical_claims", "evidence_sets"):
+        if normalized_gold.get(field) not in (None, "", [], {}):
+            result[field] = normalized_gold[field]
+    if normalized_gold.get("structured_gold_aliases"):
+        result["structured_gold_aliases"] = normalized_gold["structured_gold_aliases"]
     if unit.context_available:
         result["actual_context"] = unit.actual_context
     if unit.citations_available:
@@ -1368,6 +1735,58 @@ def _normalize_judgement(response: dict[str, Any], unit: JudgeUnit, dataset: str
                 "supported": False,
                 "reason": "UNSUPPORTED_" + "_AND_".join(item.upper() for item in missing) + "_ABSENT",
             }
+    if _norm_dataset(dataset) == MIXED_DATASET_ID:
+        question = unit.question
+        claims_available = bool(_structured_reference_claims(question))
+        if not _canonical_claim_gold_available(question):
+            result["dimensions"]["critical_claim_coverage"] = {
+                "score": None,
+                "supported": False,
+                "reason": "N_A_CANONICAL_CRITICAL_GOLD_UNAVAILABLE_ADAPTED_REFERENCE_RUBRIC",
+            }
+        if _answerability(question) != "unanswerable":
+            result["dimensions"]["strict_unanswerable"] = {
+                "score": None,
+                "supported": False,
+                "reason": "N_A_ANSWERABLE_ITEM",
+            }
+        if _answerability(question) != "answerable":
+            for name in MIXED_ANSWERABLE_ONLY_DIMENSION_NAMES:
+                result["dimensions"][name] = {
+                    "score": None,
+                    "supported": False,
+                    "reason": "N_A_UNANSWERABLE_ITEM",
+                }
+        runtime = result["dimensions"].get("runtime_context_faithfulness")
+        correctness = result["dimensions"].get("response_claim_correctness")
+        if (
+            _answerability(question) == "answerable"
+            and unit.context_available
+            and isinstance(runtime, Mapping)
+            and not runtime.get("supported")
+            and isinstance(correctness, Mapping)
+            and correctness.get("supported")
+            and _finite_number(correctness.get("score"))
+            and float(correctness["score"]) > 0
+        ):
+            result["dimensions"]["runtime_context_faithfulness"] = {
+                "score": 0.0,
+                "supported": True,
+                "reason": "PROTOCOL_ZERO: scored answer claims are not supported by the explicit runtime context",
+            }
+        if not claims_available:
+            # The reference-answer diagnostic is intentionally retained as an
+            # adapted judgement, but its canonical critical gate remains N/A.
+            result.setdefault("adaptation", {})
+            result["adaptation"].update(
+                {
+                    "rubric": "ADAPTED_REFERENCE_RUBRIC",
+                    "canonical_reference_claims": False,
+                    "reference_claim_recall_is_diagnostic": True,
+                    "canonical_gold_fields": ["scored_reference_claims", "critical_claims", "evidence_sets"],
+                    "canonical_metrics_emitted": False,
+                }
+            )
     if dataset == "multihop-rag" and unit.question.get("answerable", True):
         result["dimensions"]["strict_refusal"] = {
             "score": None,
@@ -1422,7 +1841,8 @@ class JudgeRunner:
         concurrency: int = DEFAULT_CONCURRENCY,
         retries: int = DEFAULT_RETRIES,
         timeout: float = DEFAULT_TIMEOUT,
-        qianfan_base_url: str | None = None,
+        judge_base_url: str | None = None,
+        maas_base_url: str | None = None,
         http_factory: Callable[..., Any] | None = None,
         exact_ragas: bool = False,
     ) -> None:
@@ -1435,7 +1855,14 @@ class JudgeRunner:
         self.concurrency = int(concurrency)
         self.retries = int(retries)
         self.timeout = float(timeout)
-        self.qianfan_base_url = str(qianfan_base_url or self.env.get("QIANFAN_BASE_URL", DEFAULT_QIANFAN_BASE_URL)).rstrip("/")
+        # ``maas_base_url`` remains a Python API compatibility alias for old
+        # callers. It no longer implies a MaaS judge and is validated against
+        # the frozen official DeepSeek endpoint below.
+        self.judge_base_url = str(
+            judge_base_url
+            or maas_base_url
+            or self.env.get("DEEPSEEK_BASE_URL", DEFAULT_JUDGE_BASE_URL)
+        ).rstrip("/")
         self.http_factory = http_factory
         self.exact_ragas = exact_ragas
         self.package: ConditionPackage | None = None
@@ -1445,23 +1872,23 @@ class JudgeRunner:
         self.store: JudgeStore | None = None
 
     @property
-    def qianfan_api_key(self) -> str:
-        # Deliberately only read the Qianfan environment variable.  No CLI
-        # argument, package field, or TaaS fallback is accepted.
-        return str(self.env.get("QIANFAN_API_KEY", "")).strip()
+    def judge_api_key(self) -> str:
+        # Deliberately read only the newly provisioned DeepSeek credential.
+        # The historical key and MaaS key are not fallback candidates.
+        return str(self.env.get(JUDGE_API_KEY_ENV, "")).strip()
 
     def _load(self) -> None:
         self.package = load_condition_package(self.package_path, condition=self.condition_name, exact_ragas=self.exact_ragas)
-        self.runner = load_runner_run(self.run_dir)
+        self.runner = load_runner_run(self.run_dir, allow_incomplete=self.dry_run)
         self.contract = metric_contract_for(self.package.dataset_id, exact_ragas=self.exact_ragas, context_operating_point=_first(self.package.condition_manifest, "context_operating_point", "context_budget", default=_first(self.runner.start, "context_operating_point", "context_budget")))
         self.units = _build_units(self.package, self.runner)
-        self.store = JudgeStore(self.output, secrets=(self.qianfan_api_key, self.env.get("TAAS_API_KEY", "")))
+        self.store = JudgeStore(self.output, secrets=(self.judge_api_key, self.env.get("TAAS_API_KEY", "")))
 
     def _taas_errors(self) -> list[str]:
         assert self.package is not None and self.runner is not None
         values = _taas_values(self.package.manifest, self.package.condition_manifest, self.runner.start, self.runner.summary)
-        if any(marker in self.qianfan_base_url.casefold() for marker in TAAS_MARKERS):
-            values.append(self.qianfan_base_url)
+        if any(marker in self.judge_base_url.casefold() for marker in TAAS_MARKERS):
+            values.append(self.judge_base_url)
         return [f"TAAS_PROVIDER_FORBIDDEN:{value}" for value in values]
 
     def _frozen_provider_errors(self) -> list[str]:
@@ -1480,19 +1907,18 @@ class JudgeRunner:
         if not isinstance(selection, Mapping):
             return []
         errors: list[str] = []
-        for key, expected_provider, expected_model in (
-            ("text", QIANFAN_PROVIDER, TEXT_JUDGE_MODEL),
-            ("multimodal", QIANFAN_PROVIDER, MULTIMODAL_JUDGE_MODEL),
-        ):
+        for key in ("text", "judge", "llm"):
             value = selection.get(key)
             if not isinstance(value, Mapping):
                 continue
             provider = str(value.get("provider", "")).casefold()
-            model = str(value.get("model", ""))
-            if provider and provider != expected_provider:
+            model = str(value.get("model", value.get("judge_model", "")))
+            if provider and provider not in {JUDGE_PROVIDER, "deepseek", "dsv4f"}:
                 errors.append(f"JUDGE_PROVIDER_FROZEN:{key}:{provider}")
-            if model and model != expected_model:
+            if model and model != TEXT_JUDGE_MODEL:
                 errors.append(f"JUDGE_MODEL_FROZEN:{key}:{model}")
+        if isinstance(selection.get("multimodal"), Mapping):
+            errors.append("JUDGE_MULTIMODAL_FORBIDDEN")
         embedding = selection.get("embedding")
         if isinstance(embedding, Mapping):
             provider = str(embedding.get("provider", "")).casefold()
@@ -1513,9 +1939,11 @@ class JudgeRunner:
             "source_run_id": self.runner.source_run_id,
             "source_run_dir": str(self.runner.root),
             "dataset": self.package.dataset,
+            "dataset_id": self.package.dataset_id,
             "dataset_revision": self.package.revision,
             "split": self.package.split,
             "condition": self.package.condition,
+            "evaluation_condition": TEXT_ONLY_CONDITION if self.package.dataset_id == MIXED_DATASET_ID else self.package.condition,
             "planned": {
                 "questions": len(self.units),
                 "initial_attempts": len(self.units),
@@ -1529,23 +1957,29 @@ class JudgeRunner:
                 "runner_terminal": _hash_value(self.runner.terminal),
             },
             "judge": {
-                "provider": QIANFAN_PROVIDER,
-                "text_model": TEXT_JUDGE_MODEL,
-                "multimodal_model": MULTIMODAL_JUDGE_MODEL,
+                "provider": JUDGE_PROVIDER,
+                "model": TEXT_JUDGE_MODEL,
+                "model_version": JUDGE_MODEL_VERSION,
+                "multimodal": False,
+                "image_llm": "NOT_APPLICABLE",
                 "temperature": 0,
-                "prompt_version": "judge-prompt-v1",
+                "thinking": {"type": "disabled"},
+                "prompt_version": PROMPT_VERSION,
                 "prompt_hash": prompt_hash,
                 "response_schema": RESPONSE_SCHEMA,
                 "response_schema_hash": _hash_value(judge_response_schema(self.package.dataset_id)),
+                "rubric_version": self.contract.get("rubric_version"),
+                "rubric_routes": sorted(select_frozen_rubric(unit.question)["rubric_id"] for unit in self.units),
                 "exact_ragas": False,
             },
             "metric_contract": self.contract,
             "provider": {
                 "model_egress": "external",
-                "policy": "no_taas",
-                "qianfan": {"provider": QIANFAN_PROVIDER, "base_url": self.qianfan_base_url, "key_loaded": bool(self.qianfan_api_key)},
-                "maas": {"provider": EMBEDDING_PROVIDER, "model": EMBEDDING_MODEL, "only_if_exact_metric": True, "used": False},
+                "policy": "deepseek_text_maas_embedding",
+                "text_judge": {"provider": JUDGE_PROVIDER, "base_url": self.judge_base_url, "model": TEXT_JUDGE_MODEL, "api_key_env": JUDGE_API_KEY_ENV, "key_loaded": bool(self.judge_api_key), "used": True},
                 "taas_used": False,
+                "multimodal_used": False,
+                "image_llm": {"status": "NOT_APPLICABLE", "calls": 0},
             },
             "failure_policy": {
                 "initial_denominator": "all planned initial judge units",
@@ -1587,6 +2021,8 @@ class JudgeRunner:
             errors.append("RETRIES_MUST_BE_NON_NEGATIVE")
         if self.timeout <= 0:
             errors.append("TIMEOUT_MUST_BE_POSITIVE")
+        if not _valid_judge_base_url(self.judge_base_url):
+            errors.append("JUDGE_BASE_URL_MUST_USE_DEEPSEEK_OFFICIAL")
         errors.extend(self._taas_errors())
         errors.extend(self._frozen_provider_errors())
         start_dataset = _norm_dataset(self.runner.start.get("dataset", ""))
@@ -1601,10 +2037,13 @@ class JudgeRunner:
             warnings.append("RUN_INITIAL_HASH_UNVERIFIED")
         if not self.runner.hashes_verified["terminal"]:
             warnings.append("RUN_TERMINAL_HASH_UNVERIFIED")
+        dry_run_without_qa = self.dry_run and not any(row.get("stage") == "qa" for row in self.runner.terminal)
+        if dry_run_without_qa:
+            warnings.append("RUN_QA_TERMINAL_LEDGER_NOT_PRESENT_DRY_RUN")
         if not self.units:
             errors.append("JUDGE_INITIAL_DENOMINATOR_EMPTY")
-        if not self.dry_run and not self.qianfan_api_key:
-            errors.append("QIANFAN_API_KEY_MISSING")
+        if not self.dry_run and not self.judge_api_key:
+            errors.append(f"{JUDGE_API_KEY_ENV}_MISSING")
         # Package questions missing from the runner denominator are not
         # silently added, and runner units missing from the package remain a
         # visible failure if the run is otherwise usable.
@@ -1618,21 +2057,36 @@ class JudgeRunner:
                 self.store.prepare(self._start_record(), self.units, source_run_id=self.runner.source_run_id)
         except JudgeError as exc:
             errors.append(str(exc))
+        rubric_rows = [select_frozen_rubric(unit.question) for unit in self.units]
         return {
-            "status": "READY" if not errors else "BLOCKED",
+            "status": ("DRY_RUN" if dry_run_without_qa and not errors else ("READY" if not errors else "BLOCKED")),
             "errors": errors,
             "warnings": warnings,
             "run_id": self.runner.source_run_id,
             "dataset": self.package.dataset,
+            "dataset_id": self.package.dataset_id,
             "condition": self.package.condition,
+            "evaluation_condition": TEXT_ONLY_CONDITION if self.package.dataset_id == MIXED_DATASET_ID else self.package.condition,
             "planned_n": len(self.units),
             "provider": {
-                "text_model": TEXT_JUDGE_MODEL,
-                "multimodal_model": MULTIMODAL_JUDGE_MODEL,
-                "qianfan_key_loaded": bool(self.qianfan_api_key),
-                "maas_embedding_model": EMBEDDING_MODEL,
-                "maas_embedding_used": False,
+                "provider": JUDGE_PROVIDER,
+                "model": TEXT_JUDGE_MODEL,
+                "model_version": JUDGE_MODEL_VERSION,
+                "thinking": {"type": "disabled"},
+                "multimodal": False,
+                "image_llm": "NOT_APPLICABLE",
+                "api_key_env": JUDGE_API_KEY_ENV,
+                "api_key_loaded": bool(self.judge_api_key),
+                "base_url": self.judge_base_url,
                 "taas_used": False,
+                "image_calls": 0,
+            },
+            "rubric_version": MIXED_RUBRIC_VERSION if self.package.dataset_id == MIXED_DATASET_ID else None,
+            "rubric_slices": {
+                "source_dataset": sorted(Counter(row["source_dataset"] for row in rubric_rows)),
+                "question_type": sorted(Counter(row["question_type"] for row in rubric_rows)),
+                "answerability": sorted(Counter(row["answerability"] for row in rubric_rows)),
+                "routes": sorted(row["rubric_id"] for row in rubric_rows),
             },
             "metric_contract": self.contract,
             "artifacts": {
@@ -1656,9 +2110,9 @@ class JudgeRunner:
         input_text = json.dumps(input_record, ensure_ascii=False, sort_keys=True)
         schema_text = json.dumps(schema, ensure_ascii=False, sort_keys=True)
         prompt = PROMPT_TEMPLATE.format(contract=contract_text, input_record=input_text, schema=schema_text)
-        model = MULTIMODAL_JUDGE_MODEL if unit.image_evidence_available else TEXT_JUDGE_MODEL
+        model = TEXT_JUDGE_MODEL
         messages: list[dict[str, Any]] = [{"role": "system", "content": "Return only valid JSON matching the schema."}]
-        messages.append({"role": "user", "content": _multimodal_content(prompt, unit.image_paths) if unit.image_evidence_available else prompt})
+        messages.append({"role": "user", "content": prompt})
         try:
             max_tokens = max(512, int(self.env.get("JUDGE_MAX_TOKENS", "2048")))
         except (TypeError, ValueError):
@@ -1668,8 +2122,13 @@ class JudgeRunner:
             "messages": messages,
             "stream": False,
             "temperature": 0,
+            "thinking": {"type": "disabled"},
             "max_tokens": max_tokens,
-            "response_format": {"type": "json_schema", "json_schema": {"name": f"{self.package.dataset_id}_judge", "strict": True, "schema": schema}},
+            # DeepSeek dsv4f currently supports JSON object mode but rejects
+            # OpenAI's json_schema response-format variant. The complete
+            # schema remains in the prompt and validate_judge_response applies
+            # the frozen strict contract locally before any score is accepted.
+            "response_format": {"type": "json_object"},
         }
         return input_record, body
 
@@ -1685,8 +2144,13 @@ class JudgeRunner:
                 "error_code": "RUNNER_" + unit.runner_status,
                 "error": unit.runner_error or unit.runner_status,
                 "runner_status": unit.runner_status,
-                "judge_model": MULTIMODAL_JUDGE_MODEL if unit.image_evidence_available else TEXT_JUDGE_MODEL,
+                "judge_model": TEXT_JUDGE_MODEL,
+                "model_version": JUDGE_MODEL_VERSION,
+                "image_llm": "NOT_APPLICABLE",
+                "prompt_version": PROMPT_VERSION,
                 "prompt_hash": _prompt_hash(self.package.dataset_id),
+                "thinking": {"type": "disabled"},
+                "usage": {},
                 "retry_count": 0,
                 "planned_denominator": True,
             }
@@ -1700,8 +2164,13 @@ class JudgeRunner:
                 "error_code": "RUNNER_UNSUPPORTED",
                 "error": unit.runner_error or "RUNNER_UNSUPPORTED",
                 "runner_status": unit.runner_status,
-                "judge_model": MULTIMODAL_JUDGE_MODEL if unit.image_evidence_available else TEXT_JUDGE_MODEL,
+                "judge_model": TEXT_JUDGE_MODEL,
+                "model_version": JUDGE_MODEL_VERSION,
+                "image_llm": "NOT_APPLICABLE",
+                "prompt_version": PROMPT_VERSION,
                 "prompt_hash": _prompt_hash(self.package.dataset_id),
+                "thinking": {"type": "disabled"},
+                "usage": {},
                 "retry_count": 0,
                 "planned_denominator": True,
             }
@@ -1711,18 +2180,23 @@ class JudgeRunner:
                 "source_run_id": self.runner.source_run_id,
                 "question_id": unit.question_id,
                 "repeat_id": unit.repeat_id,
-                "status": "EMPTY",
+                "status": "FAILED",
                 "error_code": "EMPTY_ANSWER",
                 "runner_status": unit.runner_status,
-                "judge_model": MULTIMODAL_JUDGE_MODEL if unit.image_evidence_available else TEXT_JUDGE_MODEL,
+                "judge_model": TEXT_JUDGE_MODEL,
+                "model_version": JUDGE_MODEL_VERSION,
+                "image_llm": "NOT_APPLICABLE",
+                "prompt_version": PROMPT_VERSION,
                 "prompt_hash": _prompt_hash(self.package.dataset_id),
+                "thinking": {"type": "disabled"},
+                "usage": {},
                 "retry_count": 0,
                 "planned_denominator": True,
             }
         input_record, body = self._input_and_body(unit)
-        client = QianfanJudgeClient(
-            base_url=self.qianfan_base_url,
-            api_key=self.qianfan_api_key,
+        client = OpenAIJudgeClient(
+            base_url=self.judge_base_url,
+            api_key=self.judge_api_key,
             output=self.output,
             timeout=self.timeout,
             http_factory=self.http_factory,
@@ -1737,6 +2211,9 @@ class JudgeRunner:
                 raw_path = self.store.write_raw(unit, attempt, request={"method": "POST", "path": "/chat/completions", "body": body, "headers": {"Authorization": "Bearer <redacted>"}}, response=response)
                 raw_paths.append(raw_path)
                 attempt_raw_path = raw_path
+                usage = _usage_from_chat_response(response)
+                raw_response_hash = _hash_value(_redacted(response, self.store.secrets))
+                raw_artifact_hash = _hash_file(self.output / raw_path)
                 if isinstance(raw_value, Mapping):
                     parsed = dict(raw_value)
                 else:
@@ -1752,15 +2229,30 @@ class JudgeRunner:
                     "status": "SUCCESS",
                     "runner_status": unit.runner_status,
                     "judge_model": body["model"],
+                    "model": body["model"],
+                    "model_version": JUDGE_MODEL_VERSION,
+                    "provider": JUDGE_PROVIDER,
+                    "prompt_version": PROMPT_VERSION,
+                    "image_llm": "NOT_APPLICABLE",
                     "prompt_hash": _prompt_hash(self.package.dataset_id),
                     "response_schema_hash": _hash_value(judge_response_schema(self.package.dataset_id)),
                     "temperature": 0,
+                    "thinking": {"type": "disabled"},
                     "max_tokens": body["max_tokens"],
                     "context_available": unit.context_available,
                     "gold_evidence_available": unit.gold_evidence_available,
                     "citations_available": unit.citations_available,
                     "image_evidence_available": unit.image_evidence_available,
                     "retry_count": attempt - 1,
+                    "usage": usage,
+                    "raw_response_hash": raw_response_hash,
+                    "raw_artifact_hash": raw_artifact_hash,
+                    "raw_artifact_hashes": [
+                        _hash_file(self.output / path)
+                        for path in raw_paths
+                        if (self.output / path).is_file()
+                    ],
+                    "raw_redacted": True,
                     "raw_response_paths": raw_paths,
                     "retry_errors": retry_errors,
                     "judgement": normalized,
@@ -1796,15 +2288,28 @@ class JudgeRunner:
                         "error_code": code,
                         "error": str(exc),
                         "judge_model": body["model"],
+                        "model": body["model"],
+                        "model_version": JUDGE_MODEL_VERSION,
+                        "provider": JUDGE_PROVIDER,
+                        "prompt_version": PROMPT_VERSION,
+                        "image_llm": "NOT_APPLICABLE",
                         "prompt_hash": _prompt_hash(self.package.dataset_id),
                         "response_schema_hash": _hash_value(judge_response_schema(self.package.dataset_id)),
                         "temperature": 0,
+                        "thinking": {"type": "disabled"},
                         "max_tokens": body["max_tokens"],
                         "context_available": unit.context_available,
                         "gold_evidence_available": unit.gold_evidence_available,
                         "citations_available": unit.citations_available,
                         "image_evidence_available": unit.image_evidence_available,
                         "retry_count": attempt - 1,
+                        "usage": {},
+                        "raw_artifact_hashes": [
+                            _hash_file(self.output / path)
+                            for path in raw_paths
+                            if (self.output / path).is_file()
+                        ],
+                        "raw_redacted": True,
                         "raw_response_paths": raw_paths,
                         "retry_errors": retry_errors,
                         "planned_denominator": True,
@@ -1860,92 +2365,239 @@ class JudgeRunner:
         initial_rows = _read_jsonl(self.store.initial_path, required=False)
         planned_keys = {_unit_key(row.get("question_id"), row.get("repeat_id", 1)) for row in initial_rows}
         terminal_by_key = {_unit_key(row.get("question_id"), row.get("repeat_id", 1)): row for row in rows}
-        denominator = {
-            "planned_n": len(planned_keys),
-            "terminal_n": sum(key in terminal_by_key for key in planned_keys),
-            "pending_n": sum(key not in terminal_by_key for key in planned_keys),
-            "failed_n": sum(_status(terminal_by_key[key].get("status")) in FAILURE_STATUSES for key in planned_keys if key in terminal_by_key),
-            "unsupported_n": sum(_status(terminal_by_key[key].get("status")) in UNSUPPORTED_STATUSES for key in planned_keys if key in terminal_by_key),
-            "empty_n": sum(_status(terminal_by_key[key].get("status")) == "EMPTY" for key in planned_keys if key in terminal_by_key),
+        unit_by_key = {_unit_key(unit.question_id, unit.repeat_id): unit for unit in self.units}
+        judgement_by_key = {
+            key: _normalize_judgement(dict(row["judgement"]), unit_by_key[key], self.package.dataset_id)
+            for key, row in terminal_by_key.items()
+            if key in unit_by_key and isinstance(row.get("judgement"), Mapping)
         }
-        denominator["valid_n"] = denominator["terminal_n"] - denominator["failed_n"] - denominator["unsupported_n"]
-        dimension_names = list(self.contract["dimensions"])
-        dimensions: dict[str, Any] = {}
-        for name in dimension_names:
+        mixed_canonical_gold_missing = self.package.dataset_id == MIXED_DATASET_ID and not all(
+            structured_gold_complete(unit.question) for unit in self.units
+        )
+
+        def keys_for_dimension(keys: set[tuple[str, int]], name: str) -> set[tuple[str, int]]:
+            if self.package.dataset_id != MIXED_DATASET_ID:
+                return keys
+            if name in MIXED_ANSWERABLE_ONLY_DIMENSION_NAMES:
+                return {key for key in keys if _answerability(unit_by_key[key].question) == "answerable"}
+            if name in MIXED_UNANSWERABLE_ONLY_DIMENSION_NAMES:
+                return {key for key in keys if _answerability(unit_by_key[key].question) == "unanswerable"}
+            return keys
+
+        def denominator_for(keys: set[tuple[str, int]]) -> dict[str, int]:
+            terminal_keys = keys.intersection(terminal_by_key)
+            failed_n = sum(_status(terminal_by_key[key].get("status")) in FAILURE_STATUSES for key in terminal_keys)
+            unsupported_n = sum(_status(terminal_by_key[key].get("status")) in UNSUPPORTED_STATUSES for key in terminal_keys)
+            return {
+                "planned_n": len(keys),
+                "terminal_n": len(terminal_keys),
+                "pending_n": len(keys - terminal_keys),
+                "failed_n": failed_n,
+                "unsupported_n": unsupported_n,
+                "empty_n": sum(_status(terminal_by_key[key].get("status")) == "EMPTY" for key in terminal_keys),
+                "valid_n": len(terminal_keys) - failed_n - unsupported_n,
+            }
+
+        def dimension_for(keys: set[tuple[str, int]], name: str, *, canonical_gate: bool = True) -> dict[str, Any]:
+            planned_n = len(keys)
+            if canonical_gate and mixed_canonical_gold_missing and name in MIXED_CANONICAL_DIMENSION_NAMES:
+                reason = "N/A:MISSING_STRUCTURED_CLAIM_GOLD"
+                return {
+                    "value": None,
+                    "scale": self.contract["dimensions"][name]["scale"],
+                    "numerator": 0.0,
+                    "denominator": planned_n,
+                    "planned_n": planned_n,
+                    "observed_n": 0,
+                    "missing_n": planned_n,
+                    "applicable_n": 0,
+                    "initial_denominator": planned_n,
+                    "valid_n": 0,
+                    "eligible_n": 0,
+                    "failed_n": 0,
+                    "na_n": planned_n,
+                    "n_a_n": planned_n,
+                    "N-A": planned_n,
+                    "pending_n": planned_n,
+                    "unsupported_n": planned_n,
+                    "na_reason": reason,
+                    "reason": reason,
+                    "na_reasons": {"MISSING_STRUCTURED_CLAIM_GOLD": planned_n},
+                    "valid_denominator_policy": "canonical structured Gold and complete judge observations are required; adapted reference diagnostics are reported separately",
+                }
             scores: list[float] = []
-            unsupported_n = 0
             failed_n = 0
-            for key in planned_keys:
+            na_n = 0
+            pending_n = 0
+            na_reasons: Counter[str] = Counter()
+            for key in keys:
                 row = terminal_by_key.get(key)
                 if row is None:
-                    unsupported_n += 1
+                    pending_n += 1
                     continue
                 status = _status(row.get("status"))
                 if status in FAILURE_STATUSES:
                     failed_n += 1
                     continue
-                judgement = row.get("judgement")
-                item = judgement.get("dimensions", {}).get(name) if isinstance(judgement, Mapping) else None
-                if not isinstance(item, Mapping) or not item.get("supported") or not _finite_number(item.get("score")):
-                    unsupported_n += 1
+                if status in UNSUPPORTED_STATUSES:
+                    na_n += 1
+                    na_reasons["RUNNER_UNSUPPORTED"] += 1
                     continue
-                scores.append(float(item["score"]))
-            value = (sum(scores) / denominator["planned_n"]) if scores and denominator["planned_n"] else None
-            eligible_n = len(scores)
-            dimensions[name] = {
+                judgement = judgement_by_key.get(key)
+                item = judgement.get("dimensions", {}).get(name) if isinstance(judgement, Mapping) else None
+                if isinstance(item, Mapping) and item.get("supported") and _finite_number(item.get("score")):
+                    scores.append(float(item["score"]))
+                else:
+                    na_n += 1
+                    reason = str(item.get("reason") if isinstance(item, Mapping) else "JUDGEMENT_DIMENSION_MISSING")
+                    na_reasons[reason] += 1
+            numerator = sum(scores) if scores else 0.0
+            metric_denominator_n = len(scores) + failed_n
+            missing_n = pending_n + na_n
+            value = (numerator / metric_denominator_n) if metric_denominator_n and not missing_n else None
+            result = {
                 "value": value,
                 "scale": self.contract["dimensions"][name]["scale"],
-                "numerator": sum(scores) if scores else 0.0,
-                "denominator": denominator["planned_n"],
-                "planned_n": denominator["planned_n"],
-                "eligible_n": eligible_n,
+                "numerator": numerator,
+                "denominator": planned_n if missing_n else metric_denominator_n,
+                "planned_n": planned_n,
+                "observed_n": len(scores),
+                "missing_n": missing_n,
+                "applicable_n": metric_denominator_n if not missing_n else 0,
+                "initial_denominator": planned_n,
+                "valid_n": len(scores),
+                "eligible_n": len(scores),
                 "failed_n": failed_n,
-                "unsupported_n": unsupported_n,
-                "valid_denominator_policy": "all planned initial units; failed units contribute no score and remain in the denominator; unsupported inputs are not inferred",
+                "na_n": na_n,
+                "n_a_n": na_n,
+                "N-A": na_n,
+                "pending_n": pending_n,
+                "unsupported_n": na_n,
+                "na_reason": "N/A:INCOMPLETE_PLANNED_JUDGE_OBSERVATIONS" if missing_n else None,
+                "reason": "INCOMPLETE_PLANNED_JUDGE_OBSERVATIONS" if missing_n else None,
+                "na_reasons": dict(sorted(na_reasons.items())),
+                "valid_denominator_policy": "dimension-applicable planned units; failed applicable units remain in the denominator; N-A inputs remain explicit and are not imputed",
             }
-        by_type: dict[str, Any] = {}
-        labels = sorted({_question_type(unit.question) for unit in self.units})
-        for label in labels:
-            label_keys = {_unit_key(unit.question_id, unit.repeat_id) for unit in self.units if _question_type(unit.question) == label}
-            label_rows = {key: terminal_by_key.get(key) for key in label_keys}
-            label_dims: dict[str, Any] = {}
-            for name in dimension_names:
-                scores = []
-                unsupported = 0
-                failed = 0
-                for row in label_rows.values():
-                    if row is None:
-                        unsupported += 1
-                        continue
-                    if _status(row.get("status")) in FAILURE_STATUSES:
-                        failed += 1
-                        continue
-                    item = row.get("judgement", {}).get("dimensions", {}).get(name) if isinstance(row.get("judgement"), Mapping) else None
-                    if isinstance(item, Mapping) and item.get("supported") and _finite_number(item.get("score")):
-                        scores.append(float(item["score"]))
-                    else:
-                        unsupported += 1
-                label_dims[name] = {
-                    "value": sum(scores) / len(label_keys) if scores and label_keys else None,
-                    "planned_n": len(label_keys),
-                    "eligible_n": len(scores),
-                    "failed_n": failed,
-                    "unsupported_n": unsupported,
-                }
-            by_type[label] = {"denominator": {"planned_n": len(label_keys), "terminal_n": sum(key in terminal_by_key for key in label_keys)}, "dimensions": label_dims}
+            return result
+
+        def report_for(keys: set[tuple[str, int]]) -> dict[str, Any]:
+            return {
+                "denominator": denominator_for(keys),
+                "dimensions": {
+                    name: dimension_for(keys_for_dimension(keys, name), name)
+                    for name in self.contract["dimensions"]
+                },
+            }
+
+        denominator = denominator_for(planned_keys)
+        dimension_names = list(self.contract["dimensions"])
+        dimensions = {
+            name: dimension_for(keys_for_dimension(planned_keys, name), name)
+            for name in dimension_names
+        }
+        adapted_dimension_sources = (
+            {
+                "response_claim_correctness": "response_claim_correctness",
+                "reference_claim_recall_adapted": "reference_claim_recall",
+                "critical_claim_coverage_adapted": "critical_claim_coverage",
+                "gold_evidence_support_adapted": "gold_evidence_support",
+                "runtime_context_faithfulness": "runtime_context_faithfulness",
+            }
+            if self.package.dataset_id == MIXED_DATASET_ID
+            else {}
+        )
+        adapted_dimensions = {}
+        for output_name, source_name in adapted_dimension_sources.items():
+            record = dimension_for(keys_for_dimension(planned_keys, source_name), source_name, canonical_gate=False)
+            record["metric_id"] = output_name
+            record["protocol_label"] = "ADAPTED_REFERENCE_RUBRIC"
+            adapted_dimensions[output_name] = record
+
+        def unique_labels(selector: Callable[[JudgeUnit], str]) -> list[str]:
+            return sorted({selector(unit) for unit in self.units})
+
+        by_question_type = {
+            label: report_for({_unit_key(unit.question_id, unit.repeat_id) for unit in self.units if _question_type(unit.question) == label})
+            for label in unique_labels(lambda unit: _question_type(unit.question))
+        }
+        by_source_dataset = {
+            label: report_for({_unit_key(unit.question_id, unit.repeat_id) for unit in self.units if _source_dataset(unit.question) == label})
+            for label in unique_labels(lambda unit: _source_dataset(unit.question))
+        }
+        by_answerability = {
+            label: report_for({_unit_key(unit.question_id, unit.repeat_id) for unit in self.units if _answerability(unit.question) == label})
+            for label in unique_labels(lambda unit: _answerability(unit.question))
+        }
+        by_source_and_type: dict[str, Any] = {}
+        for source in unique_labels(lambda unit: _source_dataset(unit.question)):
+            by_source_and_type[source] = {}
+            source_units = [unit for unit in self.units if _source_dataset(unit.question) == source]
+            for question_type in sorted({_question_type(unit.question) for unit in source_units}):
+                by_source_and_type[source][question_type] = report_for(
+                    {_unit_key(unit.question_id, unit.repeat_id) for unit in source_units if _question_type(unit.question) == question_type}
+                )
+
+        usage_totals: Counter[str] = Counter()
+        for row in terminal_by_key.values():
+            usage = row.get("usage")
+            if isinstance(usage, Mapping):
+                for key, value in usage.items():
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        usage_totals[str(key)] += value
+        canonical_claims_complete = all(
+            bool(_structured_reference_claims(unit.question))
+            and bool(_structured_critical_claims(unit.question))
+            and bool(_structured_evidence_sets(unit.question))
+            for unit in self.units
+        )
+        if self.package.dataset_id == MIXED_DATASET_ID and not canonical_claims_complete:
+            tdas = {
+                "value": None,
+                "status": "N/A",
+                "mode": "ADAPTED_REFERENCE_RUBRIC",
+                "reason": "MISSING_STRUCTURED_CLAIM_GOLD",
+                "na_reason": "N/A:MISSING_STRUCTURED_CLAIM_GOLD",
+                "planned_n": len(self.units),
+                "observed_n": 0,
+                "missing_n": len(self.units),
+            }
+        else:
+            tdas = {"value": None, "status": "NOT_COMPUTED", "mode": "CANONICAL_CLAIM_RUBRIC"}
         return {
             "schema": "competitor-eval-judge-aggregate-v1",
             "status": "COMPLETE" if denominator["pending_n"] == 0 else "INCOMPLETE",
             "dataset": self.package.dataset,
             "dataset_id": self.package.dataset_id,
             "condition": self.package.condition,
+            "evaluation_condition": TEXT_ONLY_CONDITION if self.package.dataset_id == MIXED_DATASET_ID else self.package.condition,
             "protocol_tag": self.contract["protocol_tag"],
-            "judge": {"provider": QIANFAN_PROVIDER, "text_model": TEXT_JUDGE_MODEL, "multimodal_model": MULTIMODAL_JUDGE_MODEL, "temperature": 0, "prompt_hash": _prompt_hash(self.package.dataset_id)},
+            "rubric_version": self.contract.get("rubric_version"),
+            "judge": {
+                "provider": JUDGE_PROVIDER,
+                "model": TEXT_JUDGE_MODEL,
+                "model_version": JUDGE_MODEL_VERSION,
+                "multimodal": False,
+                "image_llm": "NOT_APPLICABLE",
+                "thinking": {"type": "disabled"},
+                "temperature": 0,
+                "prompt_version": PROMPT_VERSION,
+                "prompt_hash": _prompt_hash(self.package.dataset_id),
+                "usage": dict(sorted(usage_totals.items())),
+            },
             "context_operating_point": self.contract.get("context_operating_point"),
             "denominator": denominator,
             "dimensions": dimensions,
-            "by_question_type": by_type,
-            "artifacts": {"terminal_ledger": str(self.store.terminal_path), "initial_ledger": str(self.store.initial_path)},
+            "adapted_dimensions": adapted_dimensions,
+            "by_question_type": by_question_type,
+            "by_source_dataset": by_source_dataset,
+            "by_answerability": by_answerability,
+            "by_source_dataset_question_type": by_source_and_type,
+            "tdas": tdas,
+            "artifacts": {
+                "terminal_ledger": str(self.store.terminal_path),
+                "initial_ledger": str(self.store.initial_path),
+                "raw_dir": str(self.store.raw_dir),
+            },
         }
 
 
@@ -1960,10 +2612,11 @@ def preflight(
     concurrency: int = DEFAULT_CONCURRENCY,
     retries: int = DEFAULT_RETRIES,
     timeout: float = DEFAULT_TIMEOUT,
-    qianfan_base_url: str | None = None,
+    judge_base_url: str | None = None,
+    maas_base_url: str | None = None,
     exact_ragas: bool = False,
 ) -> dict[str, Any]:
-    return JudgeRunner(run_dir, package, output, condition=condition, env=env, dry_run=dry_run, concurrency=concurrency, retries=retries, timeout=timeout, qianfan_base_url=qianfan_base_url, exact_ragas=exact_ragas).preflight()
+    return JudgeRunner(run_dir, package, output, condition=condition, env=env, dry_run=dry_run, concurrency=concurrency, retries=retries, timeout=timeout, judge_base_url=judge_base_url, maas_base_url=maas_base_url, exact_ragas=exact_ragas).preflight()
 
 
 def run(
@@ -1977,12 +2630,13 @@ def run(
     concurrency: int = DEFAULT_CONCURRENCY,
     retries: int = DEFAULT_RETRIES,
     timeout: float = DEFAULT_TIMEOUT,
-    qianfan_base_url: str | None = None,
+    judge_base_url: str | None = None,
+    maas_base_url: str | None = None,
     http_factory: Callable[..., Any] | None = None,
     retries_override: int | None = None,
     exact_ragas: bool = False,
 ) -> dict[str, Any]:
-    return JudgeRunner(run_dir, package, output, condition=condition, env=env, dry_run=dry_run, concurrency=concurrency, retries=retries if retries_override is None else retries_override, timeout=timeout, qianfan_base_url=qianfan_base_url, http_factory=http_factory, exact_ragas=exact_ragas).run()
+    return JudgeRunner(run_dir, package, output, condition=condition, env=env, dry_run=dry_run, concurrency=concurrency, retries=retries if retries_override is None else retries_override, timeout=timeout, judge_base_url=judge_base_url, maas_base_url=maas_base_url, http_factory=http_factory, exact_ragas=exact_ragas).run()
 
 
 def aggregate(
@@ -1995,10 +2649,11 @@ def aggregate(
     concurrency: int = DEFAULT_CONCURRENCY,
     retries: int = DEFAULT_RETRIES,
     timeout: float = DEFAULT_TIMEOUT,
-    qianfan_base_url: str | None = None,
+    judge_base_url: str | None = None,
+    maas_base_url: str | None = None,
     exact_ragas: bool = False,
 ) -> dict[str, Any]:
-    runner = JudgeRunner(run_dir, package, output, condition=condition, env=env, concurrency=concurrency, retries=retries, timeout=timeout, qianfan_base_url=qianfan_base_url, exact_ragas=exact_ragas)
+    runner = JudgeRunner(run_dir, package, output, condition=condition, env=env, concurrency=concurrency, retries=retries, timeout=timeout, judge_base_url=judge_base_url, maas_base_url=maas_base_url, exact_ragas=exact_ragas)
     try:
         runner._load()
         assert runner.store is not None and runner.package is not None and runner.runner is not None and runner.contract is not None
@@ -2022,7 +2677,8 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
         sub.add_argument("--retries", type=int, default=DEFAULT_RETRIES)
         sub.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
-        sub.add_argument("--qianfan-base-url", default="")
+        sub.add_argument("--judge-base-url", "--deepseek-base-url", dest="judge_base_url", default="")
+        sub.add_argument("--maas-base-url", default="", help="legacy alias; must still resolve to the official DeepSeek endpoint")
         sub.add_argument("--exact-ragas", action="store_true", help="require the exact installed ragas==0.2.15 executor; never falls back")
     return parser
 
@@ -2038,7 +2694,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "concurrency": args.concurrency,
             "retries": args.retries,
             "timeout": args.timeout,
-            "qianfan_base_url": args.qianfan_base_url or None,
+            "judge_base_url": args.judge_base_url or None,
+            "maas_base_url": args.maas_base_url or None,
             "exact_ragas": args.exact_ragas,
         }
         if args.command == "preflight":
