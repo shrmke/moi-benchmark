@@ -2203,7 +2203,7 @@ class CampaignOrchestrator:
             if not manifest_path.is_file():
                 raise CampaignError(f"TEXT_ONLY_SEMANTIC_AUDIT_MANIFEST_MISSING:{manifest_path}")
             expected_hashes.add(hashlib.sha256(manifest_path.read_bytes()).hexdigest())
-        if observed_hash not in expected_hashes:
+        if expected_hashes != {observed_hash}:
             raise CampaignError("TEXT_ONLY_SEMANTIC_AUDIT_MANIFEST_HASH_MISMATCH")
 
     def run(self) -> dict[str, Any]:

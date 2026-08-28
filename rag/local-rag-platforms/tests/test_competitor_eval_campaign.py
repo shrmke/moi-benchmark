@@ -246,6 +246,51 @@ def test_text_only_execute_fails_closed_without_semantic_signoff(tmp_path):
     assert not (config.output_root / "001-moi-rag-bench-v0-1-text-only-no-mllm-text-only-no-mllm-moi_local").exists()
 
 
+def test_text_only_signoff_rejects_multiple_distinct_manifests(tmp_path):
+    module = _module()
+    manifests = []
+    for name in ("first", "second"):
+        manifest = tmp_path / name / "manifest.json"
+        manifest.parent.mkdir()
+        manifest.write_text(json.dumps({"dataset_id": name}), encoding="utf-8")
+        manifests.append(manifest)
+    signoff = tmp_path / "audit.json"
+    signoff.write_text(
+        json.dumps(
+            {
+                "schema": module.TEXT_ONLY_SEMANTIC_AUDIT_SCHEMA,
+                "status": "PASS",
+                "mllm_required": False,
+                "manifest_sha256": hashlib.sha256(manifests[0].read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = module.CampaignConfig(
+        repo_root=ROOT,
+        package_root=tmp_path,
+        output_root=tmp_path / "artifacts",
+        checkpoint=tmp_path / "campaign.json",
+        progress_log=tmp_path / "progress.jsonl",
+        text_only_semantic_audit=signoff,
+        campaign_id="test-distinct-manifest-signoff",
+        execute=True,
+    )
+    plan = {
+        "units": [
+            {"mllm_required": False, "manifest": str(manifest)}
+            for manifest in manifests
+        ]
+    }
+
+    try:
+        module.CampaignOrchestrator(config)._validate_text_only_semantic_audit(plan)
+    except module.CampaignError as exc:
+        assert str(exc) == "TEXT_ONLY_SEMANTIC_AUDIT_MANIFEST_HASH_MISMATCH"
+    else:  # pragma: no cover - assertion makes the failure explicit
+        raise AssertionError("one signoff authorized multiple distinct manifests")
+
+
 def test_campaign_preview_includes_judge_and_metrics_after_each_runner(tmp_path):
     module = _module()
     package = ROOT / "datasets/moi-rag-bench-v0.1-raw-corpus/text_only_ready_for_eval"
