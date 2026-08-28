@@ -51,7 +51,7 @@ rag/
 
 ```bash
 python3 -m compileall -q benchmarks scripts local-rag-platforms tests
-uv run --with pytest pytest local-rag-platforms/tests -q
+uv run --with pytest --with-requirements local-rag-platforms/api_console/requirements.txt pytest local-rag-platforms/tests -q
 ```
 
 需要访问外部模型或本地服务的测试必须显式配置对应环境变量。不要把真实 key 写入配置 JSON、README、运行产物或提交历史。

@@ -41,7 +41,7 @@ raw document
 
 历史 WikiEval 默认：chunk size 512 字符、overlap 50（生产默认 64）、每 section 5 chunks；Embedding `bge-m3` 1024d；MatrixOne 列 `VECF64(1024)`；最大 embedding 输入 8192 UTF-8 bytes；写入 float32→float64；IVFFLAT `lists=256`。检索过滤 `disabled=0`、`level=chunk`、file/version/volume scope；全文使用 `MATCH ... AGAINST`，向量使用 `l2_distance`，然后稳定去重与 evidence expansion。现有主结果没有 cross-encoder reranker。
 
-历史索引曾用 `vector_cosine_ops` 建索引却用 `l2_distance` 查询；当前未提交修复改为 `vector_l2_ops`。修复后的运行必须新建 run ID，不可覆盖历史延迟。
+历史索引曾用 `vector_cosine_ops` 建索引却用 `l2_distance` 查询；当前 workitems 建表默认已冻结为 `vector_l2_ops`，检索实现也会根据现有 IVFFLAT operator 选择匹配的 `l2_distance`/`cosine_distance`。本 benchmark 的正式配置使用每 run 唯一 database/table，readiness smoke 已实际验证 L2 index；历史 cosine 资源不纳入本轮 formal package，修复后的运行使用新 run ID，不覆盖历史延迟。
 
 ### 2.3 Dify 数据链路
 
