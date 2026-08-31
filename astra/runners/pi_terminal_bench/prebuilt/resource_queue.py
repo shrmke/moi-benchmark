@@ -21,7 +21,12 @@ def task_resources(path: Path) -> tuple[str, float, int, int]:
     )
 
 
-def build_queue(tasks_root: Path) -> list[tuple[str, float, int, int]]:
+def build_queue(
+    tasks_root: Path,
+    *,
+    excluded_tasks: frozenset[str] = EXCLUDED_TASKS,
+    included_tasks: frozenset[str] | None = None,
+) -> list[tuple[str, float, int, int]]:
     source_rows = sorted(
         (
             task_resources(path)
@@ -36,13 +41,25 @@ def build_queue(tasks_root: Path) -> list[tuple[str, float, int, int]]:
             f"found {len(source_rows)}"
         )
     source_names = {row[0] for row in source_rows}
-    missing_exclusions = EXCLUDED_TASKS - source_names
+    missing_exclusions = excluded_tasks - source_names
     if missing_exclusions:
         raise RuntimeError(
             "excluded Pi tasks are missing from the source cohort: "
             + ", ".join(sorted(missing_exclusions))
         )
-    return [row for row in source_rows if row[0] not in EXCLUDED_TASKS]
+    if included_tasks is not None:
+        missing_inclusions = included_tasks - source_names
+        if missing_inclusions:
+            raise RuntimeError(
+                "requested tasks are missing from the source cohort: "
+                + ", ".join(sorted(missing_inclusions))
+            )
+    return [
+        row
+        for row in source_rows
+        if row[0] not in excluded_tasks
+        and (included_tasks is None or row[0] in included_tasks)
+    ]
 
 
 def main() -> None:
@@ -51,8 +68,14 @@ def main() -> None:
     )
     parser.add_argument("--tasks-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--include-task", action="append", default=[])
+    parser.add_argument("--no-default-exclusions", action="store_true")
     args = parser.parse_args()
-    rows = build_queue(args.tasks_root)
+    rows = build_queue(
+        args.tasks_root,
+        excluded_tasks=(frozenset() if args.no_default_exclusions else EXCLUDED_TASKS),
+        included_tasks=(frozenset(args.include_task) if args.include_task else None),
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         "".join(

@@ -90,12 +90,11 @@ class FakeEnvironment:
             return Result(stdout=f"{self.task_workdir}\n")
         if command.startswith("test -d "):
             return Result()
-        if "astra-trajectory-export.py register" in command:
-            self.session_id = str(uuid.uuid4())
-            return Result(stdout=json.dumps({"session_id": self.session_id}))
         if "lifecycle-process-probe.py run" in command:
             argv = shlex.split(command)
-            self.asserted_session_id = argv[argv.index("--session-id") + 1]
+            if "--session-id" in argv or "--no-resume" not in argv:
+                raise AssertionError("the first product turn must create a fresh session")
+            self.session_id = str(uuid.uuid4())
             self.retry_overall_deadline_seconds = float(
                 argv[argv.index("--overall-deadline-seconds") + 1]
             )
@@ -107,11 +106,11 @@ class FakeEnvironment:
                     + 1
                 ]
             )
-            if self.asserted_session_id != self.session_id:
-                raise AssertionError("product did not use the registered session id")
             self.product_started.set()
             await asyncio.sleep(self.product_delay)
             return Result(return_code=self.product_return_code)
+        if "astra-trajectory-export.py discover" in command:
+            return Result(stdout=json.dumps({"session_id": self.session_id}))
         if command.startswith("cat ") and command.endswith("product.cleanup.json"):
             return Result(stdout=json.dumps(self.cleanup_report))
         if command.startswith("cat ") and command.endswith("product.identity.json"):
@@ -392,7 +391,7 @@ class AstraC0AgentTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 cold_agent._runtime_env()["ASTRA_LLM_TOTAL_BUDGET_S"],
-                "900",
+                "27000",
             )
             self.assertTrue(warm_agent.read_memory)
             self.assertNotIn(
@@ -722,7 +721,7 @@ class AstraC0AgentTests(unittest.IsolatedAsyncioTestCase):
                 context.metadata["frozen_inputs_manifest_sha256"]
             )
             self.assertEqual(context.metadata["llm_fallback_timeout_sec"], 600)
-            self.assertEqual(context.metadata["llm_total_budget_sec"], 900)
+            self.assertEqual(context.metadata["llm_total_budget_sec"], 27000)
             self.assertEqual(context.metadata["task_workdir"], "/app")
             self.assertEqual(context.metadata["stream_transport_retry_limit"], 2)
             self.assertEqual(context.metadata["stream_transport_retry_count"], 0)
@@ -868,7 +867,7 @@ class AstraC0AgentTests(unittest.IsolatedAsyncioTestCase):
                 "/workspace",
             )
 
-    async def test_unknown_task_uses_generic_noop_trigger_without_new_parameter(self):
+    async def test_unknown_task_uses_generic_noop_trigger_with_dataset_timeout(self):
         instruction = "Create /app/answer.txt with the requested result.\n"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -909,15 +908,17 @@ class AstraC0AgentTests(unittest.IsolatedAsyncioTestCase):
             )
             agent = AstraTerminalBenchC0Agent(
                 logs_dir=logs_dir,
-                model_name="model-id",
+                model_name="glm-5.2(thinking:high)",
                 linux_binary_path="/tmp/not-used",
                 extra_env={
                     "ASTRA_ACCESS_TOKEN": "test-token",
                     "ASTRA_API_URL": "http://host.docker.internal:17001",
+                    "ASTRA_TBENCH_TEMPERATURE": "0",
                 },
                 trigger_timeout_sec=1,
                 poll_interval_sec=0.001,
                 turn_timeout_sec=2000,
+                product_timeout_multiplier=1.0,
             )
             environment = FakeEnvironment()
             context = AgentContext()
@@ -940,9 +941,17 @@ class AstraC0AgentTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 context.metadata["configured_product_timeout_sec"],
-                2025.0,
+                900.0,
             )
-            self.assertEqual(context.metadata["product_timeout_sec"], 2000)
+            self.assertEqual(context.metadata["product_timeout_sec"], 900.0)
+            self.assertEqual(context.metadata["product_timeout_multiplier"], 1.0)
+            self.assertEqual(context.metadata["thinking_effort"], "high")
+            self.assertEqual(context.metadata["temperature_requested"], 0.0)
+            self.assertIsNone(context.metadata["temperature_effective"])
+            self.assertEqual(
+                context.metadata["temperature_policy"],
+                "suppressed_by_thinking_protocol",
+            )
             self.assertTrue(context.metadata["trigger_hit"])
             self.assertTrue(context.metadata["lifecycle_gate_passed"])
             self.assertFalse(context.metadata["fault_injected"])

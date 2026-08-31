@@ -77,8 +77,8 @@ def completed_tasks(
     jobs_dir: Path,
     *,
     expected_agent: str = EXPECTED_AGENT,
-    expected_model: str = EXPECTED_MODEL,
-    expected_version: str = EXPECTED_VERSION,
+    expected_model: str | None = EXPECTED_MODEL,
+    expected_version: str | None = EXPECTED_VERSION,
     required_kwargs: Mapping[str, object] | None = None,
 ) -> set[str]:
     if required_kwargs is None:
@@ -100,8 +100,14 @@ def completed_tasks(
             finished_at
             and trial_config.get("install_only") is not True
             and agent.get("name") == expected_agent
-            and agent.get("model_name") == expected_model
-            and kwargs.get("version") == expected_version
+            and (
+                expected_model is None
+                or agent.get("model_name") == expected_model
+            )
+            and (
+                expected_version is None
+                or kwargs.get("version") == expected_version
+            )
             and all(
                 kwargs.get(key) == value
                 for key, value in required_kwargs.items()
@@ -167,6 +173,8 @@ async def run_tasks(
     jobs_dir: Path,
     generated_root: Path,
     workspace_root: Path,
+    max_workers: int | None = None,
+    job_name_prefix: str | None = None,
 ) -> int:
     available_memory = 3
     available_cpus = 6
@@ -180,7 +188,7 @@ async def run_tasks(
         env["PYTHONPATH"] = str(workspace_root) + (
             f":{current_pythonpath}" if current_pythonpath else ""
         )
-        process = await asyncio.create_subprocess_exec(
+        command = [
             harbor_bin,
             "run",
             "--config",
@@ -191,8 +199,10 @@ async def run_tasks(
             str(generated_root / task.name),
             "--no-force-build",
             "--yes",
-            env=env,
-        )
+        ]
+        if job_name_prefix is not None:
+            command.extend(["--job-name", f"{job_name_prefix}-{task.name}"])
+        process = await asyncio.create_subprocess_exec(*command, env=env)
         return await process.wait()
 
     while pending or running:
@@ -201,6 +211,7 @@ async def run_tasks(
             if (
                 task.memory_tokens <= available_memory
                 and task.cpus <= available_cpus
+                and (max_workers is None or len(running) < max_workers)
             ):
                 available_memory -= task.memory_tokens
                 available_cpus -= task.cpus
@@ -242,16 +253,26 @@ def main() -> int:
     )
     parser.add_argument("--queue", type=Path, required=True)
     parser.add_argument("--jobs-dir", type=Path, required=True)
-    parser.add_argument("--generated-root", type=Path, required=True)
+    parser.add_argument(
+        "--generated-root",
+        "--tasks-root",
+        dest="generated_root",
+        type=Path,
+        required=True,
+    )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--workspace-root", type=Path, required=True)
     parser.add_argument("--harbor-bin", required=True)
     parser.add_argument("--print-pending", action="store_true")
     parser.add_argument("--rerun-completed", action="store_true")
     parser.add_argument("--max-tasks", type=int)
+    parser.add_argument("--max-workers", type=int)
+    parser.add_argument("--job-name-prefix")
     parser.add_argument("--expected-agent", default=EXPECTED_AGENT)
     parser.add_argument("--expected-model", default=EXPECTED_MODEL)
     parser.add_argument("--expected-version", default=EXPECTED_VERSION)
+    parser.add_argument("--ignore-model-name", action="store_true")
+    parser.add_argument("--ignore-agent-version", action="store_true")
     parser.add_argument(
         "--cohort-kwarg",
         action="append",
@@ -267,8 +288,10 @@ def main() -> int:
         completed = completed_tasks(
             args.jobs_dir,
             expected_agent=args.expected_agent,
-            expected_model=args.expected_model,
-            expected_version=args.expected_version,
+            expected_model=(None if args.ignore_model_name else args.expected_model),
+            expected_version=(
+                None if args.ignore_agent_version else args.expected_version
+            ),
             required_kwargs=required_kwargs,
         )
         tasks = [task for task in tasks if task.name not in completed]
@@ -276,6 +299,8 @@ def main() -> int:
         if args.max_tasks <= 0:
             parser.error("--max-tasks must be positive")
         tasks = tasks[: args.max_tasks]
+    if args.max_workers is not None and args.max_workers <= 0:
+        parser.error("--max-workers must be positive")
     if args.print_pending:
         for task in tasks:
             print(
@@ -301,6 +326,8 @@ def main() -> int:
             jobs_dir=args.jobs_dir,
             generated_root=args.generated_root,
             workspace_root=args.workspace_root,
+            max_workers=args.max_workers,
+            job_name_prefix=args.job_name_prefix,
         )
     )
 

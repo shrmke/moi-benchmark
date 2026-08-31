@@ -191,6 +191,18 @@ class CoreTests(unittest.TestCase):
         )
         self.assertNotIn("--disallowed-tools", warm_args)
 
+    def test_astra_args_can_omit_max_turns_for_new_cli(self):
+        args = astra_args(
+            remote_binary="astra",
+            model_name="glm-5.2(thinking:high)",
+            max_turns=None,
+            session_id=None,
+            permission_mode="auto",
+            read_memory=False,
+        )
+        self.assertNotIn("--max-turns", args)
+        self.assertIn("chat", args)
+
 
 class ControllerTests(unittest.IsolatedAsyncioTestCase):
     async def _run(self, condition):

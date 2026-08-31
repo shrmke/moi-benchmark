@@ -83,45 +83,54 @@ is wrapper overhead for setup, controller polling, zero-live cleanup, terminal
 ledger persistence, and best-effort log collection; it is not extra product
 execution time.
 
-Run all 89 tasks with the same C0 wrapper, defaulting to one trial at a time.
-For an 8 CPU, 8GB RAM host, keep concurrency at one and give every complete
-reproduction a unique run name:
+The GLM-5.2 runner accepts repeated `--case` arguments and reuses Pi's
+resource-aware multi-process scheduler. It has three 2GB memory tokens and six
+CPU slots: an 8GB task runs alone, a 4GB task can overlap one 2GB task, and up
+to three 2GB tasks can overlap. The Astra product deadline is exactly the
+task's dataset `[agent].timeout_sec`; Harbor's 2.5-times agent-phase allowance
+is reserved for setup, cleanup, and trajectory collection.
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
 
+ASTRA_SOURCE_ROOT="$PWD/external/astra-optimize_0731_05" \
+ASTRA_LINUX_BUILD_ROOT="$PWD/work/astra-optimize-0731-05-linux-amd64" \
+  ./astra/runners/astra_terminal_bench/build-linux-portable.sh --arch amd64
+
 export HARBOR_BIN="$HOME/.local/share/uv/tools/harbor/bin/harbor"
 export MOI_BENCH_DATA_ROOT="$PWD"
-export ASTRA_API_URL="http://host.docker.internal:17001"
-export ASTRA_TBENCH_LINUX_BINARY="$PWD/work/astra-linux-build-amd64/target/release/astra"
-export ASTRA_TBENCH_MODEL="c5bde5de-9805-48d4-a016-1db6e6018fc4"
+export ASTRA_API_URL="http://host.docker.internal:17101"
 export ASTRA_TBENCH_READ_MEMORY="false"
 
-run_name="astra-c0-$(date '+%Y%m%d-%H%M%S')"
+run_name="astra-glm52-c0-$(date '+%Y%m%d-%H%M%S')"
 
 /bin/bash astra/runners/scripts/astra-terminal-bench-all-c0.sh \
   --check \
-  --concurrency 1 \
+  --case build-pmars \
+  --case db-wal-recovery \
+  --concurrency 2 \
   --run-name "$run_name" \
-  --jobs-dir "$MOI_BENCH_DATA_ROOT/work/astra-c0-all-jobs"
+  --jobs-dir "$MOI_BENCH_DATA_ROOT/work/astra-glm52-c0-cases-jobs"
 
 caffeinate -dimsu /bin/bash \
   astra/runners/scripts/astra-terminal-bench-all-c0.sh \
   --yes \
-  --concurrency 1 \
+  --case build-pmars \
+  --case db-wal-recovery \
+  --concurrency 2 \
   --run-name "$run_name" \
-  --jobs-dir "$MOI_BENCH_DATA_ROOT/work/astra-c0-all-jobs"
+  --jobs-dir "$MOI_BENCH_DATA_ROOT/work/astra-glm52-c0-cases-jobs"
 ```
 
-The first command validates Harbor 0.20.0, the frozen Terminal-Bench commit,
-the clean 89-task snapshot, model, API address, and amd64 Linux Astra ELF, then
-prints the expanded configuration without starting a trial. The second command
-always starts all 89 tasks; it is not a pending-queue resume command. Reusing a
-jobs root is safe because Harbor stores each run below its unique run name, but
-reusing the same run name is rejected.
+The runner is fixed to `glm-5.2(thinking:high)` with requested
+`temperature=0`. Astra's high-thinking protocol omits temperature from the
+effective provider request, which is recorded explicitly rather than reported
+as an applied sampling value. Omit `--case` to queue all 89 tasks. Each case is
+run by a separate Harbor process, and a non-zero result does not prevent the
+remaining queue from running.
 
-Every started run writes a secret-free reproduction record to
-`work/astra-c0-all-jobs/.reproduction/<run-name>.tsv`. It records the workspace
+Every started batch writes a secret-free reproduction record and selected-case
+queue to `work/astra-glm52-c0-cases-jobs/.reproduction/`. It records the workspace
 and dataset commits, Harbor version, model, binary description, concurrency,
 timeouts, memory-read mode, and final Harbor exit code. It explicitly records
 that lifecycle audit/no-op status is not a score gate; verifier reward remains

@@ -86,6 +86,7 @@ def register_session(
             "metadata": {
                 "condition": "C0",
                 "controller_run_id": controller_run_id,
+                "full_llm_capture": True,
                 "task_id": task_id,
             },
         },
@@ -103,6 +104,25 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def discover_session_id(sessions_root: Path) -> str:
+    candidates: set[str] = set()
+    if sessions_root.is_dir():
+        for path in sessions_root.rglob("*"):
+            names = [path.name]
+            if path.is_file() and path.suffix == ".jsonl":
+                names.append(path.stem)
+            for name in names:
+                try:
+                    candidates.add(str(uuid.UUID(name)))
+                except ValueError:
+                    continue
+    if len(candidates) != 1:
+        raise RuntimeError(
+            f"expected exactly one isolated Astra session, found {len(candidates)}"
+        )
+    return candidates.pop()
 
 
 def _copy_local_session(
@@ -644,6 +664,8 @@ def main() -> int:
     register = commands.add_parser("register")
     register.add_argument("--controller-run-id", required=True)
     register.add_argument("--task-id", required=True)
+    discover = commands.add_parser("discover")
+    discover.add_argument("--sessions-root", type=Path, required=True)
     export = commands.add_parser("export")
     export.add_argument("--session-id", required=True)
     export.add_argument("--terminal-status", required=True)
@@ -657,6 +679,9 @@ def main() -> int:
         print("Astra API URL or credentials directory is missing", file=sys.stderr)
         return 2
     try:
+        if args.command == "discover":
+            print(json.dumps({"session_id": discover_session_id(args.sessions_root)}))
+            return 0
         if args.command == "register":
             value = register_session(
                 api_url=api_url,

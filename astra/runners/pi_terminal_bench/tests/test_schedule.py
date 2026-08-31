@@ -19,17 +19,24 @@ from astra.runners.pi_terminal_bench.prebuilt.schedule import (
 
 
 class _Process:
-    def __init__(self, task: str, active: set[str], snapshots: list[set[str]]):
+    def __init__(
+        self,
+        task: str,
+        active: set[str],
+        snapshots: list[set[str]],
+        return_code: int = 0,
+    ):
         self.task = task
         self.active = active
         self.snapshots = snapshots
+        self.return_code = return_code
 
     async def wait(self) -> int:
         self.active.add(self.task)
         self.snapshots.append(set(self.active))
         await asyncio.sleep(0)
         self.active.remove(self.task)
-        return 0
+        return self.return_code
 
 
 class PiScheduleTests(unittest.IsolatedAsyncioTestCase):
@@ -143,6 +150,41 @@ class PiScheduleTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(completed_tasks(jobs_dir), set())
 
+    def test_completed_tasks_supports_astra_environment_model_cohort(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            jobs_dir = Path(directory)
+            self._write_result(jobs_dir, with_ctrf=True)
+            result_path = jobs_dir / "job" / "task__trial" / "result.json"
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            result["config"]["agent"] = {
+                "name": (
+                    "astra.runners.astra_terminal_bench.agent:"
+                    "AstraTerminalBenchC0Agent"
+                ),
+                "model_name": None,
+                "kwargs": {
+                    "max_turns": 50,
+                    "product_timeout_multiplier": 1.0,
+                },
+            }
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+
+            completed = completed_tasks(
+                jobs_dir,
+                expected_agent=(
+                    "astra.runners.astra_terminal_bench.agent:"
+                    "AstraTerminalBenchC0Agent"
+                ),
+                expected_model=None,
+                expected_version=None,
+                required_kwargs={
+                    "max_turns": 50,
+                    "product_timeout_multiplier": 1.0,
+                },
+            )
+
+            self.assertEqual(completed, {"task"})
+
     def test_direct_schedule_entrypoint_resolves_workspace_imports(self) -> None:
         script = Path(__file__).resolve().parents[1] / "prebuilt" / "schedule.py"
         env = dict(os.environ)
@@ -232,3 +274,68 @@ class PiScheduleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             all("heavy" not in state or state == {"heavy"} for state in snapshots)
         )
+
+    async def test_nonzero_case_does_not_interrupt_remaining_queue(self) -> None:
+        tasks = [
+            Task("fails", 10, 8192, 4),
+            Task("continues", 10, 8192, 4),
+        ]
+        active: set[str] = set()
+        snapshots: list[set[str]] = []
+        started: list[str] = []
+
+        async def create_process(*args, **kwargs):
+            task = Path(args[7]).name
+            started.append(task)
+            return _Process(
+                task,
+                active,
+                snapshots,
+                return_code=17 if task == "fails" else 0,
+            )
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "asyncio.create_subprocess_exec", side_effect=create_process
+        ):
+            root = Path(directory)
+            status = await run_tasks(
+                tasks,
+                harbor_bin="harbor",
+                config=root / "config.yaml",
+                jobs_dir=root / "jobs",
+                generated_root=root,
+                workspace_root=root,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(started, ["fails", "continues"])
+
+    async def test_max_workers_caps_process_concurrency(self) -> None:
+        tasks = [
+            Task("small-a", 10, 2048, 1),
+            Task("small-b", 10, 2048, 1),
+            Task("small-c", 10, 2048, 1),
+        ]
+        active: set[str] = set()
+        snapshots: list[set[str]] = []
+
+        async def create_process(*args, **kwargs):
+            task = Path(args[7]).name
+            return _Process(task, active, snapshots)
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "asyncio.create_subprocess_exec", side_effect=create_process
+        ):
+            root = Path(directory)
+            status = await run_tasks(
+                tasks,
+                harbor_bin="harbor",
+                config=root / "config.yaml",
+                jobs_dir=root / "jobs",
+                generated_root=root,
+                workspace_root=root,
+                max_workers=2,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertTrue(all(len(state) <= 2 for state in snapshots))

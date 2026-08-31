@@ -29,18 +29,18 @@ done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 workspace_root="$(cd "$script_dir/../../.." && pwd)"
-source_root="$workspace_root/external/astra"
+source_root="${ASTRA_SOURCE_ROOT:-$workspace_root/external/astra}"
 
 case "$architecture" in
   amd64)
     docker_platform="linux/amd64"
     rust_target="x86_64-unknown-linux-musl"
-    build_root="$workspace_root/work/astra-linux-build-amd64"
+    build_root="${ASTRA_LINUX_BUILD_ROOT:-$workspace_root/work/astra-linux-build-amd64}"
     ;;
   arm64)
     docker_platform="linux/arm64"
     rust_target="aarch64-unknown-linux-musl"
-    build_root="$workspace_root/work/astra-linux-build"
+    build_root="${ASTRA_LINUX_BUILD_ROOT:-$workspace_root/work/astra-linux-build}"
     ;;
   *)
     usage

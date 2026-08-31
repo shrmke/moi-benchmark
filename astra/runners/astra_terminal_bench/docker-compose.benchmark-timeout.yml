@@ -1,0 +1,6 @@
+services:
+  api:
+    environment:
+      # Keep the API's provider-call ceiling above every dataset deadline.
+      # The Harbor/Astra runner still enforces each task's own timeout.
+      ASTRA_LLM_TOTAL_BUDGET_S: ${ASTRA_LLM_TOTAL_BUDGET_S:-27000}

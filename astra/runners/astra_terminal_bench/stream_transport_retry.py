@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -38,15 +39,32 @@ def _exit_code(return_code: int) -> int:
     return 128 + (-return_code) if return_code < 0 else return_code
 
 
-def _session_id(command: Sequence[str]) -> str:
+def _session_id(command: Sequence[str]) -> str | None:
     positions = [
         index for index, value in enumerate(command) if value == "--session-id"
     ]
+    if not positions and "--no-resume" in command:
+        return None
     if len(positions) != 1 or positions[0] + 1 >= len(command):
         raise ValueError("Astra retry command must contain exactly one --session-id")
     session_id = command[positions[0] + 1]
     if not session_id or session_id.startswith("-"):
         raise ValueError("Astra retry command has an invalid --session-id")
+    return session_id
+
+
+def _session_id_from_stdout(stdout: bytes) -> str | None:
+    try:
+        value = json.loads(stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    session_id = value.get("session_id") if isinstance(value, dict) else None
+    if not isinstance(session_id, str):
+        return None
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
+        return None
     return session_id
 
 
@@ -112,6 +130,7 @@ def run_with_retries(
         )
 
     session_id = _session_id(command)
+    current_command = list(command)
     wrapper_started_at = _utc_now()
     wrapper_started_monotonic = time.monotonic()
     deadline = (
@@ -199,7 +218,7 @@ def run_with_retries(
         )
 
         result = subprocess.run(
-            list(command),
+            list(current_command),
             input=request_input,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -212,6 +231,8 @@ def run_with_retries(
             result.stderr,
         )
         exit_code = _exit_code(result.returncode)
+        if session_id is None:
+            session_id = _session_id_from_stdout(result.stdout)
         attempt.update(
             {
                 "status": "completed",
@@ -253,6 +274,9 @@ def run_with_retries(
                     retry_skip_reason = (
                         "insufficient_remaining_deadline_for_optional_retry"
                     )
+            if should_retry and session_id is None:
+                should_retry = False
+                retry_skip_reason = "session_id_unavailable_for_retry"
 
         recovered = attempt_index > 0 and exit_code == 0
         exhausted = (
@@ -286,6 +310,12 @@ def run_with_retries(
             failure_classification=failure_classification,
         )
         if should_retry:
+            if "--no-resume" in current_command:
+                index = current_command.index("--no-resume")
+                current_command[index : index + 1] = [
+                    "--session-id",
+                    session_id,
+                ]
             request_input = _RESUME_PROMPT
             continue
 

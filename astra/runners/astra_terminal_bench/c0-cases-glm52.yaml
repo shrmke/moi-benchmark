@@ -1,0 +1,20 @@
+jobs_dir: "work/astra-glm52-c0-cases-jobs"
+n_concurrent_trials: 1
+timeout_multiplier: 2.0
+agent_timeout_multiplier: 2.5
+environment:
+  type: docker
+agents:
+  - name: astra.runners.astra_terminal_bench.agent:AstraTerminalBenchC0Agent
+    env:
+      ASTRA_API_URL: ${ASTRA_API_URL}
+      ASTRA_ACCESS_TOKEN: ${ASTRA_ACCESS_TOKEN:-}
+      ASTRA_TBENCH_LINUX_BINARY: ${ASTRA_TBENCH_LINUX_BINARY}
+      ASTRA_TBENCH_MODEL: ${ASTRA_TBENCH_MODEL}
+      ASTRA_TBENCH_READ_MEMORY: ${ASTRA_TBENCH_READ_MEMORY:-false}
+      ASTRA_TBENCH_TEMPERATURE: ${ASTRA_TBENCH_TEMPERATURE}
+    kwargs:
+      turn_timeout_sec: 27000
+      trigger_timeout_sec: 27000
+      stream_transport_retries: 2
+      product_timeout_multiplier: 1.0

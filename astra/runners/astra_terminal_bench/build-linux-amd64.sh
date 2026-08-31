@@ -3,8 +3,8 @@ set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 workspace_root=$(cd "$script_dir/../../.." && pwd)
-source_root="$workspace_root/external/astra"
-build_root="$workspace_root/work/astra-linux-build-amd64"
+source_root="${ASTRA_SOURCE_ROOT:-$workspace_root/external/astra}"
+build_root="${ASTRA_LINUX_BUILD_ROOT:-$workspace_root/work/astra-linux-build-amd64}"
 
 if [[ ! -f "$source_root/Cargo.toml" ]]; then
     echo "Astra source checkout not found at $source_root" >&2

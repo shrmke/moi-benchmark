@@ -38,6 +38,11 @@ from astra.runners.lifecycle_c0 import (
     process_probe_run_command,
     process_probe_source_path,
 )
+from astra.runners.llm_observability import (
+    apply_token_usage,
+    observability_metadata,
+    write_canonical_session,
+)
 from astra.runners.astra_terminal_bench.trajectory_export import (
     validate_trajectory_bundle,
 )
@@ -62,7 +67,7 @@ C0_CLEANUP_GRACE_SEC = 2.0
 C0_HOST_CLEANUP_MARGIN_SEC = 10
 C0_PRODUCT_TIMEOUT_MULTIPLIER = 2.25
 LLM_FALLBACK_TIMEOUT_SEC = 600
-LLM_TOTAL_BUDGET_SEC = 900
+LLM_TOTAL_BUDGET_SEC = 27000
 STREAM_OPTIONAL_RETRY_MIN_REMAINING_SEC = 930
 IDENTITY_REGISTRATION_MAX_ATTEMPTS = 3
 IDENTITY_WHOAMI_MAX_ATTEMPTS = 3
@@ -93,6 +98,29 @@ def _write_json(path: Path, value: dict[str, object]) -> None:
         )
         + "\n",
         encoding="utf-8",
+    )
+
+
+def _finalize_astra_observability(
+    logs_dir: Path,
+    session_id: str,
+) -> dict[str, object]:
+    native_sources: list[tuple[str, Path]] = []
+    try:
+        trajectory_root = logs_dir / "astra-trajectory"
+        manifest = json.loads(
+            (trajectory_root / "manifest.json").read_text(encoding="utf-8")
+        )
+        relative = manifest.get("local_journal_path")
+        if isinstance(relative, str) and relative:
+            native_sources.append(("astra_session_journal", trajectory_root / relative))
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+    return write_canonical_session(
+        output_path=logs_dir / "session.jsonl",
+        agent="astra",
+        session_id=session_id,
+        native_sources=native_sources,
     )
 
 
@@ -202,7 +230,7 @@ class AstraTerminalBenchAgent(BaseInstalledAgent):
         logs_dir: Path,
         model_name: Optional[str] = None,
         linux_binary_path: Optional[str] = None,
-        max_turns: int = 50,
+        max_turns: Optional[int] = None,
         turn_timeout_sec: int = 900,
         read_memory: Optional[bool] = None,
         *args,
@@ -215,7 +243,7 @@ class AstraTerminalBenchAgent(BaseInstalledAgent):
         # Astra credential file.
         self._extra_env.pop("ASTRA_ACCESS_TOKEN", None)
         self.linux_binary_path = linux_binary_path
-        self.max_turns = int(max_turns)
+        self.max_turns = int(max_turns) if max_turns is not None else None
         self.turn_timeout_sec = int(turn_timeout_sec)
         self.astra_model_name = model_name or self._get_env("ASTRA_TBENCH_MODEL")
         self._freeze_manifest_sha256 = self._get_env(
@@ -250,8 +278,10 @@ class AstraTerminalBenchAgent(BaseInstalledAgent):
         self._artifact_arch: Optional[str] = None
         self._artifact_sha256: Optional[str] = None
         self._task_workdir: Optional[str] = None
-        if self.max_turns <= 0 or self.turn_timeout_sec <= 0:
-            raise ValueError("max_turns and turn_timeout_sec must be positive")
+        if self.max_turns is not None and self.max_turns <= 0:
+            raise ValueError("max_turns must be positive when configured")
+        if self.turn_timeout_sec <= 0:
+            raise ValueError("turn_timeout_sec must be positive")
 
     @staticmethod
     def name() -> str:
@@ -671,6 +701,7 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
         stream_optional_retry_min_remaining_sec: float = (
             STREAM_OPTIONAL_RETRY_MIN_REMAINING_SEC
         ),
+        product_timeout_multiplier: float = C0_PRODUCT_TIMEOUT_MULTIPLIER,
         *args,
         **kwargs,
     ):
@@ -686,6 +717,11 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
         self.stream_optional_retry_min_remaining_sec = float(
             stream_optional_retry_min_remaining_sec
         )
+        self.product_timeout_multiplier = float(product_timeout_multiplier)
+        temperature_value = self._get_env("ASTRA_TBENCH_TEMPERATURE")
+        self.requested_temperature = (
+            float(temperature_value) if temperature_value is not None else None
+        )
         if self.trigger_timeout_sec <= 0 or self.poll_interval_sec <= 0:
             raise ValueError("C0 controller timeouts must be positive")
         if self.stream_transport_retries < 0:
@@ -694,6 +730,8 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
             raise ValueError(
                 "stream_optional_retry_min_remaining_sec must be non-negative"
             )
+        if self.product_timeout_multiplier <= 0:
+            raise ValueError("product_timeout_multiplier must be positive")
 
     @staticmethod
     def name() -> str:
@@ -800,7 +838,7 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
             trigger_registration_status = "generic"
             trigger_scope = "generic_product_live"
             configured_product_timeout_sec = (
-                base_timeout_sec * C0_PRODUCT_TIMEOUT_MULTIPLIER
+                base_timeout_sec * self.product_timeout_multiplier
             )
         else:
             task_id = trigger.task_id
@@ -817,7 +855,7 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
                         "the registered C0 trigger does not match the Harbor task"
                     )
                 configured_product_timeout_sec = (
-                    base_timeout_sec * C0_PRODUCT_TIMEOUT_MULTIPLIER
+                    base_timeout_sec * self.product_timeout_multiplier
                 )
             else:
                 configured_product_timeout_sec = C0_TASK_TIMEOUT_SEC[task_id]
@@ -861,8 +899,26 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
             "trajectory_capture_mode": "astra_server_and_local_session",
             "trajectory_capture_blocking": False,
             "configured_product_timeout_sec": configured_product_timeout_sec,
-            "product_timeout_multiplier": C0_PRODUCT_TIMEOUT_MULTIPLIER,
+            "product_timeout_multiplier": self.product_timeout_multiplier,
             "product_timeout_sec": product_timeout_sec,
+            "model_selector": self.astra_model_name,
+            "thinking_effort": (
+                "high"
+                if self.astra_model_name.endswith("(thinking:high)")
+                else None
+            ),
+            "temperature_requested": self.requested_temperature,
+            "temperature_effective": (
+                None
+                if self.astra_model_name.endswith("(thinking:high)")
+                else self.requested_temperature
+            ),
+            "temperature_policy": (
+                "suppressed_by_thinking_protocol"
+                if self.astra_model_name.endswith("(thinking:high)")
+                and self.requested_temperature is not None
+                else "requested"
+            ),
             "outer_cleanup_timeout_sec": (
                 product_timeout_sec + C0_HOST_CLEANUP_MARGIN_SEC
             ),
@@ -959,81 +1015,15 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
             )
             raise RuntimeError("Astra credentials are not accepted in the task container")
 
-        registration_command = shlex.join(
-            [
-                "python3",
-                REMOTE_TRAJECTORY_EXPORTER,
-                "register",
-                "--controller-run-id",
-                run_id,
-                "--task-id",
-                task_id,
-            ]
-        )
-        registration = await environment.exec(
-            command=registration_command,
-            env={
-                **self._runtime_env(),
-                "ASTRA_API_URL": self._get_env("ASTRA_API_URL"),
-            },
-            timeout_sec=30,
-        )
-        ledger.append(
-            "product_preflight",
-            check="session_registration",
-            passed=registration.return_code == 0,
-            return_code=registration.return_code,
-        )
-        try:
-            registration_value = json.loads(registration.stdout or "")
-            registered_session_id = registration_value.get("session_id")
-            if not isinstance(registered_session_id, str):
-                raise ValueError("session registration returned no session_id")
-            uuid.UUID(registered_session_id)
-            if registration.return_code != 0:
-                raise ValueError("session registration command failed")
-        except (json.JSONDecodeError, ValueError) as exc:
-            context.metadata["astra_trajectory_status"] = "failed"
-            self._write_session_record(
-                controller_run_id=run_id,
-                session_id=None,
-                product_terminal_status="not_started",
-                capture_status="failed",
-                error_type=type(exc).__name__,
-                failed=True,
-            )
-            raise RuntimeError("could not pre-register the Astra session") from exc
-        astra_session_id = registered_session_id
-        (self.logs_dir / "astra-session-created.json").write_text(
-            json.dumps(
-                registration_value,
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        initial_metadata["astra_session_id"] = astra_session_id
-        initial_metadata["astra_trajectory_status"] = "registered"
-        context.metadata.update(
-            {
-                "astra_session_id": astra_session_id,
-                "astra_trajectory_status": "registered",
-            }
-        )
-        self._write_session_record(
-            controller_run_id=run_id,
-            session_id=astra_session_id,
-            product_terminal_status="not_started",
-            capture_status="registered",
-        )
-        ledger.append(
-            "astra_session_registered",
-            astra_session_id=astra_session_id,
-        )
+        # New Astra CLIs treat --session-id strictly as a resume request. A
+        # metadata-only POST /sessions row has no canonical state and cannot be
+        # resumed, so let the first one-shot turn create its own Server session.
+        # The emitted JSON supplies the authoritative session id for trajectory
+        # export and any transport retry.
+        initial_metadata["astra_trajectory_status"] = "pending_cli_session"
+        context.metadata["astra_trajectory_status"] = "pending_cli_session"
+        ledger.append("astra_session_creation_delegated_to_cli")
 
-        assert astra_session_id is not None
         astra_argv = astra_args(
             remote_binary=REMOTE_BINARY,
             model_name=self.astra_model_name,
@@ -1103,7 +1093,7 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
 
         async def execute_product():
             nonlocal product_error, cleanup_report, cleanup_report_sha256
-            nonlocal cleanup_error, trace_capture
+            nonlocal cleanup_error, trace_capture, astra_session_id
             request_cleanup = False
             product_cancelled = False
             try:
@@ -1123,6 +1113,29 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
                     result.stderr or "",
                     encoding="utf-8",
                 )
+                try:
+                    await environment.download_file(
+                        paths["stdout"],
+                        self.logs_dir / "astra.stdout.json",
+                    )
+                    emitted = parse_astra_json(
+                        (self.logs_dir / "astra.stdout.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    emitted_session_id = emitted.get("session_id")
+                    if not isinstance(emitted_session_id, str):
+                        raise ValueError("Astra output contains no session_id")
+                    uuid.UUID(emitted_session_id)
+                    astra_session_id = emitted_session_id
+                    initial_metadata["astra_session_id"] = astra_session_id
+                    context.metadata["astra_session_id"] = astra_session_id
+                    ledger.append(
+                        "astra_session_created_by_cli",
+                        astra_session_id=astra_session_id,
+                    )
+                except (OSError, ValueError, RuntimeError):
+                    pass
                 return result
             except asyncio.CancelledError:
                 request_cleanup = True
@@ -1184,6 +1197,37 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
                         if cleanup_report
                         else ("cancelled" if product_cancelled else "adapter_infra_error")
                     )
+                    if astra_session_id is None:
+                        discovery = await environment.exec(
+                            command=shlex.join(
+                                [
+                                    "python3",
+                                    REMOTE_TRAJECTORY_EXPORTER,
+                                    "discover",
+                                    "--sessions-root",
+                                    f"{REMOTE_ROOT}/home/.astra/sessions",
+                                ]
+                            ),
+                            env=self._runtime_env(),
+                            timeout_sec=10,
+                        )
+                        try:
+                            discovered = json.loads(discovery.stdout or "")
+                            discovered_session_id = discovered.get("session_id")
+                            if not isinstance(discovered_session_id, str):
+                                raise ValueError("session discovery returned no id")
+                            uuid.UUID(discovered_session_id)
+                            if discovery.return_code != 0:
+                                raise ValueError("session discovery failed")
+                            astra_session_id = discovered_session_id
+                            initial_metadata["astra_session_id"] = astra_session_id
+                            context.metadata["astra_session_id"] = astra_session_id
+                            ledger.append(
+                                "astra_session_discovered_from_isolated_home",
+                                astra_session_id=astra_session_id,
+                            )
+                        except (json.JSONDecodeError, ValueError):
+                            pass
                     ledger.append(
                         "astra_session_terminal",
                         astra_session_id=astra_session_id,
@@ -1412,8 +1456,37 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
             and outcome.trigger_hit
             and not outcome.fault_injected
         )
+        try:
+            observability = _finalize_astra_observability(
+                self.logs_dir,
+                astra_session_id,
+            )
+        except Exception as exc:
+            observability = {
+                "session_log_path": "agent/session.jsonl",
+                "capture_status": "missing",
+                "request_count": 0,
+                "response_count": 0,
+                "unpaired_request_count": 0,
+                "incomplete_response_count": 0,
+                "errors": [
+                    {"source": "canonical_session", "error": type(exc).__name__}
+                ],
+                "token_usage": {
+                    "input_tokens": None,
+                    "fresh_input_tokens": None,
+                    "cache_read_tokens": None,
+                    "cache_write_tokens": None,
+                    "output_tokens": None,
+                    "reasoning_tokens": None,
+                    "total_tokens": None,
+                    "coverage": "missing",
+                    "reliable": False,
+                },
+            }
         metadata = {
             **initial_metadata,
+            **observability_metadata(observability),
             "trigger_hit": bool(outcome and outcome.trigger_hit),
             "trigger_reason": outcome.reason if outcome else "controller_incomplete",
             "trigger_evidence_sha256": (
@@ -1525,10 +1598,7 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
             ),
         }
         context.metadata = metadata
-        if value:
-            context.n_input_tokens = value.get("prompt_tokens")
-            context.n_cache_tokens = value.get("cache", {}).get("read_tokens")
-            context.n_output_tokens = value.get("completion_tokens")
+        apply_token_usage(context, observability)
         session_failed = (
             product_terminal_status != "completed"
             or not product_success

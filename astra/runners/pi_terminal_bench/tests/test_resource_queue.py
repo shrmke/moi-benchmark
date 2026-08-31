@@ -45,3 +45,17 @@ class PiResourceQueueTests(unittest.TestCase):
                 "excluded Pi tasks are missing.*tune-mjcf",
             ):
                 build_queue(root)
+
+    def test_can_select_named_tasks_without_pi_exclusions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(89):
+                self._write_task(root, f"task-{index:03d}")
+
+            rows = build_queue(
+                root,
+                excluded_tasks=frozenset(),
+                included_tasks=frozenset({"task-003", "task-017"}),
+            )
+
+        self.assertEqual({row[0] for row in rows}, {"task-003", "task-017"})

@@ -3,6 +3,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -104,6 +105,64 @@ class StreamTransportRetryTests(unittest.TestCase):
         self.assertEqual(report["retry_count"], 1)
         self.assertTrue(report["recovered"])
         self.assertFalse(report["exhausted"])
+
+    def test_fresh_cli_session_is_discovered_and_used_for_retry(self):
+        session_id = str(uuid.uuid4())
+        command = [
+            "/installed-agent/astra",
+            "chat",
+            "--no-resume",
+            "--stdin",
+        ]
+        results = [
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=3,
+                stdout=json.dumps({"session_id": session_id}).encode(),
+                stderr=b"[stream_transport] connection lost",
+            ),
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=json.dumps(
+                    {"session_id": session_id, "success": True}
+                ).encode(),
+                stderr=b"",
+            ),
+        ]
+        stdout = io.BytesIO()
+        stderr = io.BytesIO()
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "astra.runners.astra_terminal_bench."
+            "stream_transport_retry.subprocess.run",
+            side_effect=results,
+        ) as run, mock.patch(
+            "astra.runners.astra_terminal_bench."
+            "stream_transport_retry.sys.stdout",
+            SimpleNamespace(buffer=stdout),
+        ), mock.patch(
+            "astra.runners.astra_terminal_bench."
+            "stream_transport_retry.sys.stderr",
+            SimpleNamespace(buffer=stderr),
+        ):
+            report_path = Path(directory) / "retry.json"
+            return_code = run_with_retries(
+                command,
+                b"instruction\n",
+                max_retries=2,
+                report_path=report_path,
+            )
+            report = json.loads(report_path.read_text())
+
+        self.assertEqual(return_code, 0)
+        self.assertIn("--no-resume", run.call_args_list[0].args[0])
+        retry_command = run.call_args_list[1].args[0]
+        self.assertNotIn("--no-resume", retry_command)
+        self.assertEqual(
+            retry_command[retry_command.index("--session-id") + 1],
+            session_id,
+        )
+        self.assertEqual(report["session_id"], session_id)
 
     def test_non_stream_failure_is_not_retried(self):
         results = [

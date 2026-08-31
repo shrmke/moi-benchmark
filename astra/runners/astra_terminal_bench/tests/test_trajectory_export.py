@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from astra.runners.astra_terminal_bench.trajectory_export import (
+    discover_session_id,
     export_trajectory,
     register_session,
     validate_trajectory_bundle,
@@ -97,6 +98,17 @@ class TrajectoryExportTests(unittest.TestCase):
                 controller_run_id,
             )
             self.assertEqual(body["metadata"]["condition"], "C0")
+            self.assertIs(body["metadata"]["full_llm_capture"], True)
+
+    def test_discovers_only_session_in_isolated_home(self):
+        session_id = str(uuid.uuid4())
+        with tempfile.TemporaryDirectory() as directory:
+            sessions = Path(directory)
+            session_dir = sessions / "v1" / "users" / "owner" / "sessions"
+            session_dir.mkdir(parents=True)
+            (session_dir / f"{session_id}.jsonl").write_text("{}\n")
+
+            self.assertEqual(discover_session_id(sessions), session_id)
 
     def test_exports_server_and_local_session_trajectory(self):
         session_id = str(uuid.uuid4())

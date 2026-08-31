@@ -376,7 +376,7 @@ def astra_args(
     *,
     remote_binary: str,
     model_name: Optional[str],
-    max_turns: int,
+    max_turns: Optional[int],
     session_id: Optional[str],
     permission_mode: str,
     read_memory: bool = True,
@@ -386,7 +386,10 @@ def astra_args(
         argv.extend(["--model", model_name])
     if not read_memory:
         argv.extend(["--disallowed-tools", "memory"])
-    argv.extend(["--bare", "--no-instructions", "--max-turns", str(max_turns), "chat"])
+    argv.extend(["--bare", "--no-instructions"])
+    if max_turns is not None:
+        argv.extend(["--max-turns", str(max_turns)])
+    argv.append("chat")
     if session_id is None:
         argv.append("--no-resume")
     else:
