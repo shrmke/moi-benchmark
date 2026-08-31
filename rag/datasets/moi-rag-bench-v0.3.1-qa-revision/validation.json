@@ -1,0 +1,31 @@
+{
+  "capability_counts": {
+    "QA": 115,
+    "completeness": 15,
+    "conflict": 10,
+    "constraint": 10,
+    "multi-hop": 85,
+    "refusal": 30,
+    "structured/meta": 10
+  },
+  "constructed_evidence_resolved": true,
+  "constructed_visual_dependency_rows": 0,
+  "corpus_jsonl_byte_identical": true,
+  "counts": {
+    "documents": 297,
+    "gold": 275,
+    "questions": 275
+  },
+  "gold_document_closure": true,
+  "normalized_question_duplicates": 0,
+  "parsed_document_tree_byte_identical": true,
+  "parsed_document_tree_sha256": "9fc067e25c863e83d36990aed07739571b32af34d12649b94454457890daab41",
+  "question_gold_order_match": true,
+  "schema": "moi-rag-bench-v0.3.1-qa-validation-v1",
+  "source_counts": {
+    "docbench": 110,
+    "enterprise": 70,
+    "multihop": 95
+  },
+  "status": "PASS"
+}

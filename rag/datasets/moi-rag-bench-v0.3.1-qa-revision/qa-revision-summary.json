@@ -1,0 +1,248 @@
+{
+  "capability_counts": {
+    "QA": 115,
+    "completeness": 15,
+    "conflict": 10,
+    "constraint": 10,
+    "multi-hop": 85,
+    "refusal": 30,
+    "structured/meta": 10
+  },
+  "dataset_id": "moi-rag-bench-v0.3.1-qa-revision",
+  "document_invariants": {
+    "corpus_jsonl_byte_identical": true,
+    "parsed_document_tree_byte_identical": true,
+    "parsed_document_tree_sha256": "9fc067e25c863e83d36990aed07739571b32af34d12649b94454457890daab41"
+  },
+  "documents_changed": 0,
+  "generated_at": "2026-08-27T06:59:47.976127+00:00",
+  "mllm_calls_performed": 0,
+  "parent_dataset_id": "moi-rag-bench-v0.3-final",
+  "parsed_documents_changed": 0,
+  "questions_added": 33,
+  "questions_removed": 33,
+  "questions_rewritten_or_reclassified": 49,
+  "removed_questions": [
+    {
+      "question_id": "moi500d_qa_docbench_2175a4d8c115",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_28433b0721b8",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_2a92b9d6f137",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_2e28ee0149a2",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_33dd2c8a7036",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_3c1d39166ae5",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_46d292a916ee",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_4b03d8c80b32",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_61503c9beb8c",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_6c41ab61139d",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_7979c046cc4f",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_830d44518464",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_87400470ee75",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_8adf6617db25",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_be6672446ee3",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_ccb1f16c8039",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_d0ff42b950f5",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_d681a87c53f9",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_de1a0b10201f",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_e92ad83421e7",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_f99307768f8c",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_fa94287dcc3a",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_docbench_fed7e9d10674",
+      "question_type": "text-only",
+      "reason": "defective_or_redundant_qa_reduction",
+      "source_dataset": "docbench"
+    },
+    {
+      "question_id": "moi500d_qa_multihop_079b771dcc84",
+      "question_type": "comparison_query",
+      "reason": "repeated_gold_set_or_artificial_comparison",
+      "source_dataset": "multihop"
+    },
+    {
+      "question_id": "moi500d_qa_multihop_13bf1b87c15a",
+      "question_type": "temporal_query",
+      "reason": "repeated_gold_set_or_artificial_comparison",
+      "source_dataset": "multihop"
+    },
+    {
+      "question_id": "moi500d_qa_multihop_19ebec80a925",
+      "question_type": "comparison_query",
+      "reason": "repeated_gold_set_or_artificial_comparison",
+      "source_dataset": "multihop"
+    },
+    {
+      "question_id": "moi500d_qa_multihop_33dab87e59bf",
+      "question_type": "comparison_query",
+      "reason": "repeated_gold_set_or_artificial_comparison",
+      "source_dataset": "multihop"
+    },
+    {
+      "question_id": "moi500d_qa_multihop_6ac2e17c91ae",
+      "question_type": "temporal_query",
+      "reason": "repeated_gold_set_or_artificial_comparison",
+      "source_dataset": "multihop"
+    },
+    {
+      "question_id": "moi500d_qa_multihop_a157a2cf7478",
+      "question_type": "temporal_query",
+      "reason": "repeated_gold_set_or_artificial_comparison",
+      "source_dataset": "multihop"
+    },
+    {
+      "question_id": "moi500d_qa_multihop_a41f80dab950",
+      "question_type": "temporal_query",
+      "reason": "repeated_gold_set_or_artificial_comparison",
+      "source_dataset": "multihop"
+    },
+    {
+      "question_id": "moi500d_qa_multihop_b3ff7fa32363",
+      "question_type": "comparison_query",
+      "reason": "repeated_gold_set_or_artificial_comparison",
+      "source_dataset": "multihop"
+    },
+    {
+      "question_id": "moi500d_qa_multihop_ddc42f228f6f",
+      "question_type": "comparison_query",
+      "reason": "repeated_gold_set_or_artificial_comparison",
+      "source_dataset": "multihop"
+    },
+    {
+      "question_id": "moi500d_qa_multihop_ea8cfee0a197",
+      "question_type": "temporal_query",
+      "reason": "repeated_gold_set_or_artificial_comparison",
+      "source_dataset": "multihop"
+    }
+  ],
+  "revision": "qa-revision-v0.3.1",
+  "schema": "moi-rag-bench-v0.3.1-qa-revision-summary-v1",
+  "source_bank_priority": {
+    "construction_reason": "The original bank had no eligible DocBench structured rows or Enterprise rows in the requested addition types after frozen-corpus and duplicate checks.",
+    "eligible_excluded_bank_rows_by_source": {
+      "docbench": 188,
+      "enterprise": 1,
+      "multihop": 404
+    },
+    "eligible_rows_matching_requested_addition_types": 0,
+    "policy": "reuse an eligible frozen-corpus question before constructing a new question",
+    "reviewed_duplicate": {
+      "disposition": "rejected",
+      "question_id": "moi500d_qa_enterprise_da305fca3ebf",
+      "reason": "same Arkadia savings-reconciliation issue as retained moi500d_qa_enterprise_790c13d7307a"
+    }
+  },
+  "source_counts": {
+    "docbench": 110,
+    "enterprise": 70,
+    "multihop": 95
+  },
+  "text_only_signoff_rows": 275
+}
