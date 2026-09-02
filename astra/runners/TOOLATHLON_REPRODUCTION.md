@@ -1,7 +1,9 @@
 # Toolathlon three-product reproduction
 
 This directory contains the supported entry points for reproducing the
-Toolathlon runs with Astra, Hermes, and Pi 0.73.1. Historical qualification,
+Toolathlon runs with Astra, Hermes, and Pi 0.73.1. It also contains an
+exploratory single-task DeepSeek Harness adapter; that adapter is documented
+separately and is not part of the formal three-product batch. Historical qualification,
 freeze-generation, and hotfix scripts remain under
 `astra/benchmark/toolathlon-verified/scripts`; users should start runs only
 through the entry points documented here.
@@ -12,6 +14,8 @@ through the entry points documented here.
   first creates the qualification pair, then runs the first 14 tasks (M2) and
   the remaining 94 tasks (M3).
 - Pi runs the same 108-task schedule through its isolated container adapter.
+- DSH can run one task through a separate exploratory headless slot; it is not
+  included in the formal 108-task artifact contract or batch scheduler.
 - Every task uses the full prepare, agent, evaluate, cleanup, and artifact
   finalization lifecycle. Interrupted batches resume when invoked with the same
   output directory.
