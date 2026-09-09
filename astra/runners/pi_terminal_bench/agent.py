@@ -35,8 +35,11 @@ from astra.runners.pi_terminal_bench.events import (
 
 FROZEN_PI_VERSION = "0.73.1"
 FROZEN_MODEL_NAME = "zai/glm-5.2"
+DEEPSEEK_MODEL_NAME = "deepseek/deepseek-v4-flash"
 FROZEN_PROVIDER = "zai"
 FROZEN_MODEL = "glm-5.2"
+DEEPSEEK_PROVIDER = "deepseek"
+DEEPSEEK_MODEL = "deepseek-v4-flash"
 FROZEN_TOOLS = "read,bash,edit,write"
 REMOTE_ROOT = "/tmp/pi-c0"
 REMOTE_PI_HOME = "/tmp/pi-c0-config"
@@ -51,6 +54,7 @@ C0_MAX_PRODUCT_TIMEOUT_SEC = 24000
 C0_HOST_CLEANUP_MARGIN_SEC = 40
 C0_CLEANUP_GRACE_SEC = 10.0
 _ZAI_KEY_NAMES = ("ZAI_API_KEY", "GLM_API_KEY", "Z_AI_API_KEY")
+_DEEPSEEK_KEY_NAMES = ("DEEPSEEK_API_KEY",)
 _ENSURE_PYTHON3_COMMAND = (
     "if command -v apt-get >/dev/null 2>&1; then "
     "DEBIAN_FRONTEND=noninteractive apt-get update && "
@@ -136,6 +140,7 @@ class PiTerminalBenchC0Agent(Pi):
         trigger_timeout_sec: float = C0_MAX_PRODUCT_TIMEOUT_SEC,
         poll_interval_sec: float = 0.5,
         preinstalled: bool = False,
+        product_timeout_multiplier: float = C0_PRODUCT_TIMEOUT_MULTIPLIER,
         *args: Any,
         **kwargs: Any,
     ) -> None:
@@ -150,14 +155,28 @@ class PiTerminalBenchC0Agent(Pi):
                 f"Pi C0 requires version {FROZEN_PI_VERSION}, "
                 f"got {self.version()!r}"
             )
-        if self.model_name != FROZEN_MODEL_NAME:
+        if self.model_name == FROZEN_MODEL_NAME:
+            self._provider = FROZEN_PROVIDER
+            self._model = FROZEN_MODEL
+            self._credential_env = "ZAI_API_KEY"
+            credential_key_names = _ZAI_KEY_NAMES
+            self._reasoning_effort = "high"
+        elif self.model_name == DEEPSEEK_MODEL_NAME:
+            self._provider = DEEPSEEK_PROVIDER
+            self._model = DEEPSEEK_MODEL
+            self._credential_env = "DEEPSEEK_API_KEY"
+            credential_key_names = _DEEPSEEK_KEY_NAMES
+            self._reasoning_effort = "max"
+        else:
             raise ValueError(
-                f"Pi C0 requires model {FROZEN_MODEL_NAME}, "
+                "Pi C0 requires model zai/glm-5.2 or "
+                "deepseek/deepseek-v4-flash, "
                 f"got {self.model_name!r}"
             )
         self.turn_timeout_sec = int(turn_timeout_sec)
         self.trigger_timeout_sec = float(trigger_timeout_sec)
         self.poll_interval_sec = float(poll_interval_sec)
+        self.product_timeout_multiplier = float(product_timeout_multiplier)
         if not isinstance(preinstalled, bool):
             raise ValueError("preinstalled must be a boolean")
         self.preinstalled = preinstalled
@@ -172,17 +191,19 @@ class PiTerminalBenchC0Agent(Pi):
             )
         if self.trigger_timeout_sec <= 0 or self.poll_interval_sec <= 0:
             raise ValueError("C0 controller timeouts must be positive")
+        if self.product_timeout_multiplier <= 0:
+            raise ValueError("product_timeout_multiplier must be positive")
 
         self._provider_key_value: str | None = None
-        for key_name in _ZAI_KEY_NAMES:
+        for key_name in credential_key_names:
             value = self._get_env(key_name)
             if value:
                 self._provider_key_value = value
                 break
-        for key_name in _ZAI_KEY_NAMES:
+        for key_name in (*_ZAI_KEY_NAMES, *_DEEPSEEK_KEY_NAMES):
             self._extra_env.pop(key_name, None)
         if not self._provider_key_value:
-            raise ValueError("Pi C0 requires ZAI_API_KEY or GLM_API_KEY")
+            raise ValueError(f"Pi C0 requires {self._credential_env}")
         self._c0_metadata: dict[str, Any] = {
             "condition": "C0",
             "fault_injected": False,
@@ -201,13 +222,13 @@ class PiTerminalBenchC0Agent(Pi):
         """Expose the key only to Harbor's built-in log scrubber."""
         value = super().extra_env
         if self._provider_key_value:
-            value["ZAI_API_KEY"] = self._provider_key_value
+            value[self._credential_env] = self._provider_key_value
         return value
 
     def _product_env(self) -> dict[str, str]:
         assert self._provider_key_value is not None
         return {
-            "ZAI_API_KEY": self._provider_key_value,
+            self._credential_env: self._provider_key_value,
             "PI_CODING_AGENT_DIR": REMOTE_PI_HOME,
             "PI_OFFLINE": "1",
             "PI_SKIP_VERSION_CHECK": "1",
@@ -326,15 +347,17 @@ class PiTerminalBenchC0Agent(Pi):
         ):
             raise RuntimeError("Pi managed models.json does not match the cohort")
         model_result = await environment.exec(
-            command="/usr/local/bin/pi --list-models glm-5.2",
+            command=f"/usr/local/bin/pi --list-models {self._model}",
             env=self._product_env(),
             timeout_sec=30,
         )
         if (
             model_result.return_code != 0
-            or "glm-5.2" not in (model_result.stdout or "").lower()
+            or self._model not in (model_result.stdout or "").lower()
         ):
-            raise RuntimeError("Pi cannot resolve the frozen zai/glm-5.2 model")
+            raise RuntimeError(
+                f"Pi cannot resolve the configured {self.model_name} model"
+            )
 
     async def _run_with_controller(
         self,
@@ -451,8 +474,8 @@ class PiTerminalBenchC0Agent(Pi):
         try:
             events = validate_event_stream(
                 event_path,
-                expected_provider=FROZEN_PROVIDER,
-                expected_model=FROZEN_MODEL,
+                expected_provider=self._provider,
+                expected_model=self._model,
             )
         except (OSError, RuntimeError) as exc:
             return {
@@ -546,7 +569,7 @@ class PiTerminalBenchC0Agent(Pi):
             trigger_scope = "generic_product_live"
         product_timeout_sec = min(
             self.turn_timeout_sec,
-            base_timeout_sec * C0_PRODUCT_TIMEOUT_MULTIPLIER,
+            base_timeout_sec * self.product_timeout_multiplier,
         )
         outer_timeout_sec = product_timeout_sec + C0_HOST_CLEANUP_MARGIN_SEC
         product_cwd = await self._resolve_product_cwd(environment)
@@ -575,13 +598,17 @@ class PiTerminalBenchC0Agent(Pi):
             "predicate_probe_sha256": lifecycle_predicate_probe_source_sha256(),
             "controller_ledger": str(ledger_path),
             "configured_product_timeout_sec": (
-                base_timeout_sec * C0_PRODUCT_TIMEOUT_MULTIPLIER
+                base_timeout_sec * self.product_timeout_multiplier
             ),
-            "product_timeout_multiplier": C0_PRODUCT_TIMEOUT_MULTIPLIER,
+            "product_timeout_multiplier": self.product_timeout_multiplier,
             "product_timeout_sec": product_timeout_sec,
             "outer_cleanup_timeout_sec": outer_timeout_sec,
             "task_workdir": product_cwd,
             "pi_version": FROZEN_PI_VERSION,
+            "pi_model_provider": self._provider,
+            "pi_model": self._model,
+            "pi_reasoning_effort": self._reasoning_effort,
+            "pi_temperature": None,
             "pi_tools": FROZEN_TOOLS,
             "pi_models_path": REMOTE_MODELS,
             "pi_models_sha256": _managed_models_sha256(),
@@ -616,7 +643,7 @@ class PiTerminalBenchC0Agent(Pi):
         prompt_path.write_text(instruction, encoding="utf-8")
         await environment.upload_file(prompt_path, paths["stdin"])
         preflight = await environment.exec(
-            command="/usr/local/bin/pi --list-models glm-5.2",
+            command=f"/usr/local/bin/pi --list-models {self._model}",
             env=self._product_env(),
             timeout_sec=30,
         )
@@ -625,13 +652,13 @@ class PiTerminalBenchC0Agent(Pi):
             check="version_model_runtime",
             passed=(
                 preflight.return_code == 0
-                and "glm-5.2" in (preflight.stdout or "").lower()
+                and self._model in (preflight.stdout or "").lower()
             ),
             return_code=preflight.return_code,
         )
         if (
             preflight.return_code != 0
-            or "glm-5.2" not in (preflight.stdout or "").lower()
+            or self._model not in (preflight.stdout or "").lower()
         ):
             raise RuntimeError("Pi model preflight failed")
 
@@ -643,9 +670,9 @@ class PiTerminalBenchC0Agent(Pi):
             "--session-dir",
             REMOTE_SESSIONS,
             "--provider",
-            FROZEN_PROVIDER,
+            self._provider,
             "--model",
-            FROZEN_MODEL,
+            self._model,
             "--tools",
             FROZEN_TOOLS,
             "--no-extensions",

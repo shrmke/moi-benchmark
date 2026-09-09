@@ -8,9 +8,12 @@ from harbor.models.agent.context import AgentContext
 
 from astra.runners.dsh_terminal_bench.agent import (
     DEEPSEEK_NATIVE_PROFILE_ID,
+    DshSessionError,
     DshTerminalBenchS0Agent,
+    DshTerminalBenchC0Agent,
     TERMINAL_BENCH_DEEPSEEK_V4_FLASH_MAX_PROFILE_ID,
     TERMINAL_BENCH_GLM52_PROFILE_ID,
+    _ENSURE_PYTHON3_COMMAND,
 )
 from astra.runners.dsh_terminal_bench.install_runtime import DSH_RUNTIME_VERSION
 
@@ -32,6 +35,29 @@ class DshAgentTests(unittest.TestCase):
             self.assertEqual(
                 agent._product_env()["DEEPSEEK_API_KEY"], "test-secret"
             )
+
+    def test_python_install_preserves_ca_less_apt_sources(self) -> None:
+        self.assertNotIn("s|http://|https://|g", _ENSURE_PYTHON3_COMMAND)
+        self.assertIn("apt-get update", _ENSURE_PYTHON3_COMMAND)
+        self.assertIn("install -y python3 ca-certificates", _ENSURE_PYTHON3_COMMAND)
+
+    def test_runtime_wheel_path_comes_from_agent_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wheel = root / "runtime.whl"
+            wheel.write_bytes(b"runtime")
+            agent = DshTerminalBenchC0Agent(
+                logs_dir=root / "logs",
+                model_name="zai/glm-5.2",
+                profile=TERMINAL_BENCH_GLM52_PROFILE_ID,
+                version=DSH_RUNTIME_VERSION,
+                extra_env={
+                    "ZAI_API_KEY": "zai-secret",
+                    "DSH_RUNTIME_WHEEL": str(wheel),
+                },
+            )
+            self.assertEqual(agent.runtime_wheel_path, wheel)
+            self.assertNotIn("DSH_RUNTIME_WHEEL", agent.extra_env)
 
     def test_applies_native_token_buckets_to_harbor_context(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -63,6 +89,16 @@ class DshAgentTests(unittest.TestCase):
             self.assertEqual(metadata["dsh_usage"]["cache_write_tokens"], 3)
             self.assertEqual(len(metadata["dsh_trajectory_sha256"]), 64)
 
+    def test_rejects_dsh_error_finish_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self._agent(Path(directory))
+            with self.assertRaisesRegex(
+                DshSessionError, "dsh_finish_reason='error'"
+            ):
+                agent._require_successful_session(
+                    {"status": "error", "finish_reason": "error"}
+                )
+
     def test_terminalbench_profile_selects_glm52_route_and_secret(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             agent = DshTerminalBenchS0Agent(
@@ -78,8 +114,12 @@ class DshAgentTests(unittest.TestCase):
             )
             self.assertEqual(agent.max_turns, 50)
             self.assertEqual(agent.temperature, 0.0)
+            self.assertEqual(agent.reasoning_effort, "high")
             self.assertIsNone(agent.max_tokens)
             self.assertEqual(agent._product_env()["ZAI_API_KEY"], "zai-secret")
+            self.assertEqual(
+                agent._product_env()["DSH_REASONING_EFFORT"], "high"
+            )
 
             argv = agent._driver_argv(
                 instruction_file="/tmp/instruction.md",
@@ -104,6 +144,36 @@ class DshAgentTests(unittest.TestCase):
                     model_name="deepseek-official/deepseek-v4-flash",
                     profile=TERMINAL_BENCH_GLM52_PROFILE_ID,
                     version=DSH_RUNTIME_VERSION,
+                    extra_env={"ZAI_API_KEY": "zai-secret"},
+                )
+
+    def test_c0_product_timeout_multiplier_is_configurable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            default_agent = DshTerminalBenchC0Agent(
+                logs_dir=Path(directory),
+                model_name="zai/glm-5.2",
+                profile=TERMINAL_BENCH_GLM52_PROFILE_ID,
+                version=DSH_RUNTIME_VERSION,
+                extra_env={"ZAI_API_KEY": "zai-secret"},
+            )
+            self.assertEqual(default_agent.product_timeout_multiplier, 2.0)
+            agent = DshTerminalBenchC0Agent(
+                logs_dir=Path(directory),
+                model_name="zai/glm-5.2",
+                profile=TERMINAL_BENCH_GLM52_PROFILE_ID,
+                version=DSH_RUNTIME_VERSION,
+                product_timeout_multiplier=1.0,
+                extra_env={"ZAI_API_KEY": "zai-secret"},
+            )
+            self.assertEqual(agent.product_timeout_multiplier, 1.0)
+
+            with self.assertRaisesRegex(ValueError, "must be positive"):
+                DshTerminalBenchC0Agent(
+                    logs_dir=Path(directory),
+                    model_name="zai/glm-5.2",
+                    profile=TERMINAL_BENCH_GLM52_PROFILE_ID,
+                    version=DSH_RUNTIME_VERSION,
+                    product_timeout_multiplier=0,
                     extra_env={"ZAI_API_KEY": "zai-secret"},
                 )
 

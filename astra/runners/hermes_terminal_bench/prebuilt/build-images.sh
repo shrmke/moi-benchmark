@@ -22,10 +22,27 @@ TEMPERATURE_SCOPE="primary_zai_chat_completions"
 TEMPERATURE_PATCH_SHA256="6b71f1395a6533af731c506ceaed3dab885b04055bd3bc05eae696ba9786339a"
 TEMPERATURE_PATCHED_SOURCE_SHA256="766e0fbb7b257701323bc4a4b49697047b1b20b46f6df53d85d48314516cca0a"
 TEMPERATURE_CONFIGURATOR_SHA256=""
+TASK_LAYOUT="terminal-only-v2"
+BUILD_PROXY="${HERMES_TBENCH_BUILD_PROXY:-}"
+BUILD_NETWORK_ARGS=()
+BUILD_PROXY_ARGS=()
+if [[ -n "${BUILD_PROXY}" ]]; then
+  BUILD_NETWORK_ARGS+=(--network host)
+  BUILD_PROXY_ARGS+=(
+    --build-arg "HTTP_PROXY=${BUILD_PROXY}"
+    --build-arg "HTTPS_PROXY=${BUILD_PROXY}"
+    --build-arg "http_proxy=${BUILD_PROXY}"
+    --build-arg "https_proxy=${BUILD_PROXY}"
+    --build-arg "NO_PROXY=localhost,127.0.0.1,::1"
+    --build-arg "no_proxy=localhost,127.0.0.1,::1"
+  )
+fi
 
 PRINT_QUEUE=false
 INSTALL_ONLY=false
 REBUILD_RUNTIME=false
+BUILD_ONLY=false
+KEEP_IMAGES=false
 LOCK_ACQUIRED=false
 ACTIVE_CHILD_PID=""
 PENDING_SIGNAL=""
@@ -43,7 +60,7 @@ usage() {
 #>   build-images.sh [OPTIONS] TASK [TASK ...]
 #>   build-images.sh [OPTIONS] --queue-file FILE
 #>
-#> Build, run, and delete one ephemeral Hermes task image at a time.
+#> Build and optionally run ephemeral Hermes task images.
 #> At least one explicit task or queue file is required.
 #>
 #> Options:
@@ -53,12 +70,15 @@ usage() {
 #>   --generated-root DIR   Generated prebuilt task copies directory.
 #>   --install-only         Run Harbor setup validation without submitting the task.
 #>   --rebuild-runtime      Rebuild the shared Hermes runtime before processing the queue.
+#>   --build-only          Build generated task images without running Harbor.
+#>   --keep-images         Retain managed task images after successful processing.
 #>   --print-queue          Validate input and print the de-duplicated queue without Docker.
 #>   -h, --help             Show this help.
 #>
-#> The shared runtime and original task images are retained. Every managed
-#> task-derived image is built with --no-cache; cleanup is attempted after its
-#> Harbor run, including failure and interrupt paths.
+#> The shared runtime and original task images are retained. By default every
+#> managed task-derived image is deleted after its Harbor run. The Linux
+#> runner uses --build-only --keep-images, then removes exact labelled images
+#> after its resource-aware parallel schedule finishes.
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -374,6 +394,8 @@ ensure_runtime() {
     run_child docker buildx build \
       --load \
       --platform linux/amd64 \
+      "${BUILD_NETWORK_ARGS[@]}" \
+      "${BUILD_PROXY_ARGS[@]}" \
       --build-arg "RUNTIME_BASE_IMAGE=${RUNTIME_BASE_IMAGE}" \
       --build-arg "HERMES_TEMPERATURE=${TEMPERATURE}" \
       --build-arg \
@@ -391,6 +413,7 @@ verify_task_image() {
   local image_temperature_patch_sha256
   local image_temperature_patched_source_sha256
   local image_configurator_sha256
+  local image_layout
 
   image_temperature="$(
     image_label "${image}" "io.moi.hermes-tbench.temperature"
@@ -409,6 +432,10 @@ verify_task_image() {
     image_label "${image}" \
       "io.moi.hermes-tbench.temperature-patched-source-sha256"
   )"
+  image_layout="$(
+    image_label "${image}" "io.moi.hermes-tbench.layout"
+  )"
+  [[ "${image_layout}" == "${TASK_LAYOUT}" ]] || return 1
   [[ "${image_temperature}" == "${TEMPERATURE}" ]] || return 1
   [[ "${image_temperature_scope}" == "${TEMPERATURE_SCOPE}" ]] || return 1
   [[ "${image_temperature_patch_sha256}" \
@@ -425,9 +452,8 @@ verify_task_image() {
     "${image}" \
     -lc '
       set -eu
-      test "$(git -C /usr/local/lib/hermes-agent rev-parse HEAD)" \
+      test "$(cat /usr/local/lib/hermes-agent/.git/HEAD)" \
         = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
-      test "$(cat /opt/moi/playwright-version)" = "1.62.0"
       python_real="$(readlink -f \
         /usr/local/lib/hermes-agent/venv/bin/python)"
       case "${python_real}" in
@@ -439,6 +465,7 @@ verify_task_image() {
           ;;
       esac
       test -x "${python_real}"
+      test -x "$(command -v python3)"
       expected_temperature="$1"
       expected_scope="$2"
       expected_patch_sha256="$3"
@@ -446,12 +473,6 @@ verify_task_image() {
       expected_configurator_sha256="$5"
       test "$(cat /opt/moi/hermes-temperature)" \
         = "${expected_temperature}"
-      printf "%s  %s\n" \
-        "$(cat /opt/moi/hermes-temperature.patch.sha256)" \
-        /opt/moi/hermes-temperature.patch \
-        | sha256sum -c -
-      test "$(git -C /usr/local/lib/hermes-agent diff --name-only)" \
-        = "plugins/model-providers/zai/__init__.py"
       actual_temperature="$(cd /usr/local/lib/hermes-agent \
         && venv/bin/python -c \
         '"'"'from providers import get_provider_profile; print(get_provider_profile("zai").fixed_temperature)'"'"')"
@@ -465,16 +486,8 @@ verify_task_image() {
         "${expected_configurator_sha256}"
       /usr/local/bin/hermes version \
         | grep -F "Hermes Agent v0.19.0 (2026.7.20)"
-      /root/.hermes/node/bin/node \
-        /opt/moi/playwright-core/cli.js install-deps --dry-run chromium
       test "$(readlink -f /usr/local/bin/node)" \
         = "/root/.hermes/node/bin/node"
-      browser="$(find /root/.cache/ms-playwright -type f \
-        \( -name chrome -o -name headless_shell \) \
-        -perm -111 -print -quit)"
-      test -n "${browser}"
-      ldd_output="$(ldd "${browser}")"
-      ! printf "%s\n" "${ldd_output}" | grep -F "not found"
     ' verify \
       "${TEMPERATURE}" \
       "${TEMPERATURE_SCOPE}" \
@@ -490,6 +503,8 @@ build_task_image() {
   local exists_status
   local existing_kind=""
   local existing_task=""
+  local existing_base=""
+  local existing_layout=""
 
   base_image="$(base_image_for_task "${task_name}")" || return $?
   image="$(task_image "${task_name}")"
@@ -508,6 +523,21 @@ build_task_image() {
       || "${existing_task}" != "${task_name}" ]]; then
       die "refusing to overwrite unrecognized image: ${image}"
     fi
+    existing_base="$(
+      image_label "${image}" "io.moi.hermes-tbench.base-image" || true
+    )"
+    existing_layout="$(
+      image_label "${image}" "io.moi.hermes-tbench.layout" || true
+    )"
+    if [[ "${existing_base}" == "${base_image}" \
+      && "${existing_layout}" == "${TASK_LAYOUT}" ]] \
+      && verify_task_image "${image}"; then
+      CURRENT_IMAGE_ID="$(
+        docker image inspect --format '{{.Id}}' "${image}"
+      )" || return $?
+      printf 'Reusing verified task image: %s\n' "${image}"
+      return 0
+    fi
     printf 'Removing stale managed task image: %s\n' "${image}"
     docker image rm --force "${image}" >/dev/null || return $?
   else
@@ -518,13 +548,15 @@ build_task_image() {
   printf 'Building task image on demand: %s <- %s\n' "${image}" "${base_image}"
   run_child docker buildx build \
     --load \
-    --no-cache \
     --platform linux/amd64 \
+    "${BUILD_NETWORK_ARGS[@]}" \
+    "${BUILD_PROXY_ARGS[@]}" \
     --build-arg "BASE_IMAGE=${base_image}" \
     --build-arg "HERMES_RUNTIME_IMAGE=${RUNTIME_IMAGE}" \
     --build-arg "HERMES_TEMPERATURE=${TEMPERATURE}" \
     --build-arg \
       "HERMES_TEMPERATURE_CONFIGURATOR_SHA256=${TEMPERATURE_CONFIGURATOR_SHA256}" \
+    --build-arg "HERMES_TASK_LAYOUT=${TASK_LAYOUT}" \
     --build-arg "TASK_NAME=${task_name}" \
     --tag "${image}" \
     --file "${SCRIPT_DIR}/Dockerfile.task" \
@@ -579,11 +611,15 @@ process_task() {
   if [[ "${status}" -eq 0 ]]; then
     prepare_generated_task "${task_name}" || status=$?
   fi
-  if [[ "${status}" -eq 0 ]]; then
+  if [[ "${status}" -eq 0 && "${BUILD_ONLY}" == "false" ]]; then
     run_task "${task_name}" || status=$?
   fi
 
-  if ! cleanup_current_image; then
+  if [[ "${status}" -eq 0 && "${KEEP_IMAGES}" == "true" ]]; then
+    CURRENT_IMAGE=""
+    CURRENT_IMAGE_ID=""
+    CURRENT_TASK=""
+  elif ! cleanup_current_image; then
     [[ "${status}" -ne 0 ]] || status=1
   fi
   return "${status}"
@@ -617,6 +653,14 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --rebuild-runtime)
       REBUILD_RUNTIME=true
+      shift
+      ;;
+    --build-only)
+      BUILD_ONLY=true
+      shift
+      ;;
+    --keep-images)
+      KEEP_IMAGES=true
       shift
       ;;
     --print-queue)
@@ -681,7 +725,9 @@ command -v "${HARBOR_BIN}" >/dev/null 2>&1 \
   || die "Harbor executable not found: ${HARBOR_BIN}"
 command -v "${PYTHON_BIN}" >/dev/null 2>&1 \
   || die "Python executable not found: ${PYTHON_BIN}"
-[[ -n "${GLM_API_KEY:-}" ]] || die "GLM_API_KEY is required"
+if [[ "${BUILD_ONLY}" == "false" ]]; then
+  [[ -n "${GLM_API_KEY:-}" ]] || die "GLM_API_KEY is required"
+fi
 [[ -f "${TEMPERATURE_CONFIGURATOR}" ]] \
   || die "temperature configurator not found: ${TEMPERATURE_CONFIGURATOR}"
 TEMPERATURE_CONFIGURATOR_SHA256="$(
@@ -715,4 +761,8 @@ if [[ "${#FAILED_TASKS[@]}" -gt 0 ]]; then
   exit 1
 fi
 
-printf 'Queue completed; no managed task-derived images were retained.\n'
+if [[ "${KEEP_IMAGES}" == "true" ]]; then
+  printf 'Queue completed; managed task-derived images were retained.\n'
+else
+  printf 'Queue completed; no managed task-derived images were retained.\n'
+fi

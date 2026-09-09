@@ -702,6 +702,7 @@ class AstraC0AgentTests(unittest.IsolatedAsyncioTestCase):
                 trigger_timeout_sec=1,
                 poll_interval_sec=0.001,
                 turn_timeout_sec=10,
+                max_turns=50,
             )
             environment = FakeEnvironment()
             context = AgentContext()
@@ -782,12 +783,14 @@ class AstraC0AgentTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIn("astra-stream-transport-retry.py", product_command)
             self.assertIn("--max-retries 2", product_command)
+            self.assertNotIn("--max-turns", shlex.split(product_command))
             product_exec = next(
                 call
                 for call in environment.exec_calls
                 if "lifecycle-process-probe.py run" in call["command"]
             )
             self.assertEqual(product_exec["cwd"], "/app")
+            self.assertEqual(product_exec["env"]["ASTRA_MAX_TURNS"], "50")
             events = [
                 json.loads(line)["event"]
                 for line in (Path(directory) / "controller.jsonl")

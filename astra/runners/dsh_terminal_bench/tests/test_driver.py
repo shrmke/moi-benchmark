@@ -67,6 +67,19 @@ class DriverSummaryTests(unittest.TestCase):
         self.assertEqual(summary["step_count"], 50)
         self.assertEqual(summary["finish_reason"], "max_turns")
 
+    def test_marks_error_finish_reason_as_error(self) -> None:
+        summary = summarize_events(
+            [
+                {
+                    "type": "turn/end",
+                    "data": {"reason": {"kind": "error"}},
+                }
+            ],
+            "session-1",
+        )
+        self.assertEqual(summary["status"], "error")
+        self.assertEqual(summary["finish_reason"], "error")
+
     def test_rejects_invalid_usage(self) -> None:
         with self.assertRaisesRegex(ProtocolError, "inputTokens"):
             summarize_events(

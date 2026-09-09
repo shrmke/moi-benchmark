@@ -107,7 +107,7 @@ def summarize_events(
 
     return {
         "schema_version": 1,
-        "status": "completed",
+        "status": "error" if finish_reason == "error" else "completed",
         "session_id": session_id,
         "final_response": final_response,
         "finish_reason": finish_reason,

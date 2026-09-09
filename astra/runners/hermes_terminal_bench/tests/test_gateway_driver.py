@@ -63,6 +63,24 @@ class GatewayDriverTests(unittest.TestCase):
             )
             self.assertFalse(path.exists())
 
+    def test_deepseek_provider_credential_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "provider.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "key_name": "DEEPSEEK_API_KEY",
+                        "key_value": "provider-secret",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                consume_provider_environment(path),
+                {"DEEPSEEK_API_KEY": "provider-secret"},
+            )
+            self.assertFalse(path.exists())
+
     def test_gateway_command_has_no_automatic_approval_flags(self) -> None:
         command = gateway_command()
 

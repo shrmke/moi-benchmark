@@ -1,0 +1,92 @@
+{
+  "dataset_revision": "5c8eadf1f393183288fa08b8f73ca9a469cc5e00",
+  "generated_at": "2026-09-09T09:31:52.279354+00:00",
+  "products": {
+    "dsh": {
+      "complete": 68,
+      "discovered_trials": 135,
+      "excluded_metadata_only": 40,
+      "excluded_reason_counts_nonexclusive": {
+        "missing_assistant": 40,
+        "missing_or_unreadable_session": 15,
+        "missing_result": 2,
+        "missing_user": 15
+      },
+      "messages": 4476,
+      "partial": 27,
+      "partial_reason_counts_nonexclusive": {
+        "capture_not_saved": 23,
+        "invalid_verifier": 6,
+        "missing_terminal": 22,
+        "unpaired_tool_call": 12
+      },
+      "redactions": 45,
+      "retained": 95,
+      "tool_calls": 2254
+    },
+    "hermes": {
+      "complete": 98,
+      "discovered_trials": 144,
+      "excluded_metadata_only": 36,
+      "excluded_reason_counts_nonexclusive": {
+        "missing_assistant": 36,
+        "missing_or_unreadable_session": 1,
+        "missing_result": 1,
+        "missing_user": 1
+      },
+      "messages": 7144,
+      "partial": 10,
+      "partial_reason_counts_nonexclusive": {
+        "invalid_verifier": 9,
+        "unpaired_tool_call": 1
+      },
+      "redactions": 5,
+      "retained": 108,
+      "tool_calls": 3664
+    },
+    "pi": {
+      "complete": 57,
+      "discovered_trials": 103,
+      "excluded_metadata_only": 6,
+      "excluded_reason_counts_nonexclusive": {
+        "missing_assistant": 6,
+        "missing_or_unreadable_session": 6,
+        "missing_result": 2,
+        "missing_user": 6
+      },
+      "messages": 4899,
+      "partial": 40,
+      "partial_reason_counts_nonexclusive": {
+        "capture_not_saved": 38,
+        "invalid_verifier": 9,
+        "missing_terminal": 36,
+        "unpaired_tool_call": 12
+      },
+      "redactions": 94,
+      "retained": 97,
+      "tool_calls": 2593
+    }
+  },
+  "rules": {
+    "complete": "meaningful trace + successful capture + terminal evidence + paired tools + valid verifier",
+    "internal_reasoning": "omitted",
+    "metadata_only": "reported but not written to the dataset",
+    "partial": "finished trial with user and assistant messages that does not satisfy every complete requirement",
+    "retained_tiers": [
+      "complete",
+      "partial"
+    ],
+    "valid_verifier": "structured reward 0/1 + verifier finished + no verifier timeout/infrastructure exception"
+  },
+  "source_root": "<WORKSPACE>/work/linux-terminal-bench",
+  "totals": {
+    "complete": 223,
+    "discovered_trials": 382,
+    "excluded_metadata_only": 82,
+    "messages": 16519,
+    "partial": 77,
+    "redactions": 144,
+    "retained": 300,
+    "tool_calls": 8511
+  }
+}

@@ -1,0 +1,39 @@
+jobs_dir: "work/linux-terminal-bench/hermes/jobs"
+n_concurrent_trials: 1
+timeout_multiplier: 1.0
+agent_timeout_multiplier: 1.25
+verifier_timeout_multiplier: 2.0
+environment:
+  type: docker
+  extra_docker_compose:
+    - "astra/runners/linux_terminal_bench/docker-compose-dns.yaml"
+  mounts:
+    - type: bind
+      source: "${MOI_BENCH_ROOT}/astra/runners/hermes_terminal_bench/managed"
+      target: /etc/hermes
+      read_only: true
+verifier:
+  import_path: astra.runners.pi_terminal_bench.verifier:TerminalBenchEvidenceVerifier
+  env:
+    UV_CONCURRENT_DOWNLOADS: "1"
+    HTTP_PROXY: ${TBENCH_VERIFIER_PROXY}
+    HTTPS_PROXY: ${TBENCH_VERIFIER_PROXY}
+    http_proxy: ${TBENCH_VERIFIER_PROXY}
+    https_proxy: ${TBENCH_VERIFIER_PROXY}
+    ALL_PROXY: ""
+    all_proxy: ""
+    NO_PROXY: "localhost,127.0.0.1,::1,.debian.org,.ubuntu.com,pypi.org,files.pythonhosted.org,download.pytorch.org"
+    no_proxy: "localhost,127.0.0.1,::1,.debian.org,.ubuntu.com,pypi.org,files.pythonhosted.org,download.pytorch.org"
+agents:
+  - name: astra.runners.hermes_terminal_bench.agent:HermesTerminalBenchC0Agent
+    model_name: "zai/glm-5.2"
+    env:
+      ZAI_API_KEY: ${ZAI_API_KEY}
+    kwargs:
+      version: v2026.7.20
+      preinstalled: true
+      max_turns: 90
+      turn_timeout_sec: 24000
+      trigger_timeout_sec: 24000
+      poll_interval_sec: 0.5
+      product_timeout_multiplier: 1.0

@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call, patch
 
+from harbor.models.task.config import TaskOS
 from harbor.verifier.verifier import Verifier
 
 from astra.runners.pi_terminal_bench.verifier import (
@@ -19,6 +20,14 @@ class PiVerifierTests(unittest.IsolatedAsyncioTestCase):
     def _verifier(self, verifier_dir: Path) -> TerminalBenchEvidenceVerifier:
         verifier = object.__new__(TerminalBenchEvidenceVerifier)
         verifier.trial_paths = SimpleNamespace(verifier_dir=verifier_dir)
+        verifier.environment = SimpleNamespace(
+            os=TaskOS.LINUX,
+            exec=AsyncMock(
+                return_value=SimpleNamespace(
+                    return_code=0, stdout=None, stderr=None
+                )
+            ),
+        )
         return verifier
 
     def _cached_verifier(
@@ -51,6 +60,7 @@ class PiVerifierTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _write_cache(cache_root: Path, python_archive: str) -> None:
         (cache_root / "bin").mkdir(parents=True)
+        (cache_root / "wheels").mkdir(parents=True)
         (cache_root / "python-build-standalone" / "20251014").mkdir(
             parents=True
         )
@@ -61,6 +71,14 @@ class PiVerifierTests(unittest.IsolatedAsyncioTestCase):
             / "python-build-standalone"
             / "20251014"
             / python_archive
+        ).write_bytes(b"cached")
+        (cache_root / "wheels" / "pytest-8.4.1-py3-none-any.whl").write_bytes(
+            b"cached"
+        )
+        (
+            cache_root
+            / "wheels"
+            / "pytest_json_ctrf-0.3.5-py3-none-any.whl"
         ).write_bytes(b"cached")
 
     async def test_rejects_reward_when_pytest_did_not_run(self) -> None:
@@ -106,6 +124,12 @@ class PiVerifierTests(unittest.IsolatedAsyncioTestCase):
             result = await verifier.verify()
 
         self.assertEqual(result.rewards, {"reward": 1.0})
+        permission_command = verifier.environment.exec.await_args.kwargs
+        self.assertEqual(permission_command["user"], "root")
+        self.assertIn(
+            "chmod 0644 /logs/verifier/ctrf.json",
+            permission_command["command"],
+        )
 
     async def test_rejects_non_binary_reward(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(
@@ -157,10 +181,14 @@ class PiVerifierTests(unittest.IsolatedAsyncioTestCase):
             await verifier._prepare_bootstrap_cache()
             resolved_cache_root = cache_root.resolve()
 
-        self.assertEqual(verifier.environment.exec.await_count, 2)
+        self.assertEqual(verifier.environment.exec.await_count, 3)
         self.assertIn(
             "rm -rf -- /tmp/moi-pi-verifier-bootstrap",
             verifier.environment.exec.await_args_list[0].kwargs["command"],
+        )
+        self.assertIn(
+            "python install 3.11",
+            verifier.environment.exec.await_args_list[2].kwargs["command"],
         )
         verifier.environment.upload_file.assert_has_awaits(
             [
@@ -189,6 +217,15 @@ class PiVerifierTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             verifier.override_env["UV_PYTHON_INSTALL_MIRROR"],
             "file:///tmp/moi-pi-verifier-bootstrap/python-build-standalone",
+        )
+        self.assertEqual(
+            verifier.override_env["UV_FIND_LINKS"],
+            "file:///tmp/moi-pi-verifier-bootstrap/wheels",
+        )
+        verifier.environment.upload_file.assert_any_await(
+            resolved_cache_root / "wheels" / "pytest-8.4.1-py3-none-any.whl",
+            "/tmp/moi-pi-verifier-bootstrap/wheels/"
+            "pytest-8.4.1-py3-none-any.whl",
         )
         self.assertTrue(
             verifier.override_env["PATH"]
@@ -242,3 +279,24 @@ class PiVerifierTests(unittest.IsolatedAsyncioTestCase):
             verifier.override_env["UV_PYTHON_INSTALL_MIRROR"],
             "file:///tmp/moi-pi-verifier-bootstrap/python-build-standalone",
         )
+
+    async def test_ctrf_only_uvx_uses_offline_wheelhouse(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_root = root / "cache"
+            test_script = root / "test.sh"
+            test_script.write_text(
+                "uvx -p 3.13 -w pytest==8.4.1 "
+                "-w pytest-json-ctrf==0.3.5 pytest\n",
+                encoding="utf-8",
+            )
+            archive = (
+                "cpython-3.13.9+20251014-x86_64-unknown-linux-gnu-"
+                "install_only_stripped.tar.gz"
+            )
+            self._write_cache(cache_root, archive)
+            verifier = self._cached_verifier(cache_root, test_script)
+
+            await verifier._prepare_bootstrap_cache()
+
+        self.assertEqual(verifier.override_env["UV_OFFLINE"], "1")

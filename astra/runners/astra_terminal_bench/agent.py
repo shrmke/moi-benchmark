@@ -291,12 +291,15 @@ class AstraTerminalBenchAgent(BaseInstalledAgent):
         return f"{REMOTE_BINARY} --version"
 
     def _runtime_env(self) -> dict[str, str]:
-        return {
+        runtime_env = {
             "HOME": f"{REMOTE_ROOT}/home",
             "ASTRA_CLI_CREDENTIALS_DIR": f"{REMOTE_ROOT}/credentials",
             "ASTRA_LLM_FALLBACK_TIMEOUT_S": str(LLM_FALLBACK_TIMEOUT_SEC),
             "ASTRA_LLM_TOTAL_BUDGET_S": str(LLM_TOTAL_BUDGET_SEC),
         }
+        if self.max_turns is not None:
+            runtime_env["ASTRA_MAX_TURNS"] = str(self.max_turns)
+        return runtime_env
 
     async def _discover_task_workdir(
         self,
@@ -635,7 +638,7 @@ class AstraTerminalBenchAgent(BaseInstalledAgent):
                 astra_args(
                     remote_binary=REMOTE_BINARY,
                     model_name=self.astra_model_name,
-                    max_turns=self.max_turns,
+                    max_turns=None,
                     session_id=None,
                     permission_mode="bypass",
                     read_memory=self.read_memory,
@@ -863,6 +866,14 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
             self.turn_timeout_sec,
             configured_product_timeout_sec,
         )
+        thinking_effort = next(
+            (
+                effort
+                for effort in ("low", "medium", "high", "max")
+                if self.astra_model_name.endswith(f"(thinking:{effort})")
+            ),
+            None,
+        )
         remote_run_root = f"{REMOTE_ROOT}/c0-{run_id}"
         paths = {
             "identity": f"{remote_run_root}/product.identity.json",
@@ -902,21 +913,14 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
             "product_timeout_multiplier": self.product_timeout_multiplier,
             "product_timeout_sec": product_timeout_sec,
             "model_selector": self.astra_model_name,
-            "thinking_effort": (
-                "high"
-                if self.astra_model_name.endswith("(thinking:high)")
-                else None
-            ),
+            "thinking_effort": thinking_effort,
             "temperature_requested": self.requested_temperature,
             "temperature_effective": (
-                None
-                if self.astra_model_name.endswith("(thinking:high)")
-                else self.requested_temperature
+                None if thinking_effort else self.requested_temperature
             ),
             "temperature_policy": (
                 "suppressed_by_thinking_protocol"
-                if self.astra_model_name.endswith("(thinking:high)")
-                and self.requested_temperature is not None
+                if thinking_effort and self.requested_temperature is not None
                 else "requested"
             ),
             "outer_cleanup_timeout_sec": (
@@ -1027,7 +1031,7 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
         astra_argv = astra_args(
             remote_binary=REMOTE_BINARY,
             model_name=self.astra_model_name,
-            max_turns=self.max_turns,
+            max_turns=None,
             session_id=astra_session_id,
             permission_mode="auto",
             read_memory=self.read_memory,

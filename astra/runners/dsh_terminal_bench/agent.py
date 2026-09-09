@@ -31,6 +31,10 @@ from astra.runners.lifecycle_c0 import (
 from .install_runtime import DSH_RUNTIME_VERSION, RUNTIME_ARTIFACTS
 
 
+class DshSessionError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class DshEvaluationProfile:
     id: str
@@ -90,7 +94,7 @@ DSH_PROFILES = {
         max_tokens=None,
         max_turns=50,
         temperature=0.0,
-        reasoning_effort=None,
+        reasoning_effort="high",
         composition="jsonrpc_minimal_pi_ai_terminalbench",
         evaluation_status="exploratory_same_model_profile",
         comparison_scope="end_to_end_same_model_candidate",
@@ -122,6 +126,7 @@ REMOTE_ROOT = "/installed-agent/dsh"
 REMOTE_RUNTIME_DIR = f"{REMOTE_ROOT}/runtime"
 REMOTE_RUNTIME = f"{REMOTE_RUNTIME_DIR}/dsh-jsonrpc-agent"
 REMOTE_INSTALL_MARKER = f"{REMOTE_RUNTIME_DIR}/install.json"
+REMOTE_RUNTIME_WHEEL = f"{REMOTE_ROOT}/runtime.whl"
 REMOTE_INSTALLER = f"{REMOTE_ROOT}/install-runtime.py"
 REMOTE_DRIVER = f"{REMOTE_ROOT}/driver.py"
 REMOTE_CONFIG = f"{REMOTE_ROOT}/profile.cordis.yml"
@@ -221,6 +226,7 @@ class DshTerminalBenchS0Agent(BaseInstalledAgent):
         model_name: Optional[str] = None,
         profile: str = DEFAULT_PROFILE_ID,
         turn_timeout_sec: int = C0_MAX_PRODUCT_TIMEOUT_SEC,
+        runtime_wheel_path: Optional[str] = None,
         *args: Any,
         **kwargs: Any,
     ) -> None:
@@ -267,6 +273,19 @@ class DshTerminalBenchS0Agent(BaseInstalledAgent):
             raise ValueError(
                 f"DSH profile {self.profile.id!r} requires "
                 f"{self.profile.credential_env}"
+            )
+        configured_runtime_wheel = runtime_wheel_path or self._get_env(
+            "DSH_RUNTIME_WHEEL"
+        )
+        self._extra_env.pop("DSH_RUNTIME_WHEEL", None)
+        self.runtime_wheel_path = (
+            Path(configured_runtime_wheel).resolve()
+            if configured_runtime_wheel
+            else None
+        )
+        if self.runtime_wheel_path is not None and not self.runtime_wheel_path.is_file():
+            raise ValueError(
+                f"DSH runtime wheel was not found: {self.runtime_wheel_path}"
             )
         self._install_marker: Optional[dict[str, Any]] = None
         self._run_metadata: dict[str, Any] = {}
@@ -356,23 +375,31 @@ class DshTerminalBenchS0Agent(BaseInstalledAgent):
         await environment.upload_file(
             Path(__file__).with_name("driver.py"), REMOTE_DRIVER
         )
+        if self.runtime_wheel_path is not None:
+            await environment.upload_file(
+                self.runtime_wheel_path, REMOTE_RUNTIME_WHEEL
+            )
         await environment.upload_file(self._config_path(), REMOTE_CONFIG)
         support_remote_paths: list[str] = []
         for support_path in self._support_paths():
             remote_path = f"{REMOTE_ROOT}/{support_path.name}"
             await environment.upload_file(support_path, remote_path)
             support_remote_paths.append(remote_path)
-        readonly_paths = " ".join(
-            shlex.quote(path) for path in [REMOTE_CONFIG, *support_remote_paths]
-        )
+        readonly_paths = [REMOTE_CONFIG, *support_remote_paths]
+        installer_wheel_arg = ""
+        if self.runtime_wheel_path is not None:
+            readonly_paths.append(REMOTE_RUNTIME_WHEEL)
+            installer_wheel_arg = f" --wheel {shlex.quote(REMOTE_RUNTIME_WHEEL)}"
+        readonly_args = " ".join(shlex.quote(path) for path in readonly_paths)
         await self.exec_as_root(
             environment,
             command=(
                 f"chmod 0555 {shlex.quote(REMOTE_INSTALLER)} "
                 f"{shlex.quote(REMOTE_DRIVER)} && "
-                f"chmod 0444 {readonly_paths} && "
+                f"chmod 0444 {readonly_args} && "
                 f"python3 {shlex.quote(REMOTE_INSTALLER)} "
                 f"--destination {shlex.quote(REMOTE_RUNTIME_DIR)}"
+                f"{installer_wheel_arg}"
             ),
             timeout_sec=300,
         )
@@ -597,6 +624,16 @@ class DshTerminalBenchS0Agent(BaseInstalledAgent):
         self._run_metadata = dict(metadata)
         return metadata
 
+    @staticmethod
+    def _require_successful_session(
+        result: Optional[dict[str, Any]],
+    ) -> None:
+        if result is not None and result.get("status") != "completed":
+            raise DshSessionError(
+                "DSH session finished with "
+                f"dsh_finish_reason={result.get('finish_reason')!r}"
+            )
+
     @with_prompt_template
     async def run(
         self,
@@ -642,6 +679,7 @@ class DshTerminalBenchS0Agent(BaseInstalledAgent):
         self._apply_result(context, driver_result, metadata)
         if result.return_code != 0:
             raise self._classify_exec_error(command, result)
+        self._require_successful_session(driver_result)
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         metadata = dict(context.metadata or {})
@@ -657,13 +695,17 @@ class DshTerminalBenchC0Agent(DshTerminalBenchS0Agent):
         *args: Any,
         trigger_timeout_sec: float = C0_MAX_PRODUCT_TIMEOUT_SEC,
         poll_interval_sec: float = 0.5,
+        product_timeout_multiplier: float = C0_PRODUCT_TIMEOUT_MULTIPLIER,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.trigger_timeout_sec = float(trigger_timeout_sec)
         self.poll_interval_sec = float(poll_interval_sec)
+        self.product_timeout_multiplier = float(product_timeout_multiplier)
         if self.trigger_timeout_sec <= 0 or self.poll_interval_sec <= 0:
             raise ValueError("C0 controller timeouts must be positive")
+        if self.product_timeout_multiplier <= 0:
+            raise ValueError("product_timeout_multiplier must be positive")
 
     @staticmethod
     def name() -> str:
@@ -801,7 +843,7 @@ class DshTerminalBenchC0Agent(DshTerminalBenchS0Agent):
 
         product_timeout_sec = min(
             self.turn_timeout_sec,
-            base_timeout_sec * C0_PRODUCT_TIMEOUT_MULTIPLIER,
+            base_timeout_sec * self.product_timeout_multiplier,
         )
         outer_timeout_sec = product_timeout_sec + C0_HOST_CLEANUP_MARGIN_SEC
         task_workdir = await self._resolve_product_cwd(environment)
@@ -827,9 +869,9 @@ class DshTerminalBenchC0Agent(DshTerminalBenchS0Agent):
             "predicate_probe_sha256": lifecycle_predicate_probe_source_sha256(),
             "controller_ledger": str(ledger_path),
             "configured_product_timeout_sec": (
-                base_timeout_sec * C0_PRODUCT_TIMEOUT_MULTIPLIER
+                base_timeout_sec * self.product_timeout_multiplier
             ),
-            "product_timeout_multiplier": C0_PRODUCT_TIMEOUT_MULTIPLIER,
+            "product_timeout_multiplier": self.product_timeout_multiplier,
             "product_timeout_sec": product_timeout_sec,
             "outer_cleanup_timeout_sec": outer_timeout_sec,
         }
@@ -1017,3 +1059,4 @@ class DshTerminalBenchC0Agent(DshTerminalBenchS0Agent):
             raise RuntimeError("DSH product process did not return a result")
         if product_result.return_code != 0:
             raise self._classify_exec_error(product_command, product_result)
+        self._require_successful_session(driver_result)

@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import platform
 import shutil
 import tempfile
+import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -62,6 +64,8 @@ RUNTIME_ARTIFACTS = {
     ),
 }
 
+DOWNLOAD_ATTEMPTS = 3
+
 
 def normalize_machine(machine: str) -> str:
     normalized = machine.strip().lower()
@@ -99,8 +103,81 @@ def _runtime_member(archive: zipfile.ZipFile, artifact: RuntimeArtifact) -> str:
     return matches[0]
 
 
-def install_runtime(
+def _download_runtime(artifact: RuntimeArtifact, wheel: Path) -> None:
+    request = urllib.request.Request(
+        artifact.url,
+        headers={"User-Agent": "moi-benchmark-dsh-adapter/1"},
+    )
+    for attempt in range(DOWNLOAD_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response, wheel.open(
+                "wb"
+            ) as output:
+                shutil.copyfileobj(response, output)
+            return
+        except (OSError, http.client.HTTPException):
+            if attempt + 1 == DOWNLOAD_ATTEMPTS:
+                raise
+            time.sleep(2**attempt)
+
+
+def _wheel_sha256(wheel: Path) -> str:
+    return hashlib.sha256(wheel.read_bytes()).hexdigest()
+
+
+def ensure_runtime_wheel(
     destination: Path, *, machine: Optional[str] = None
+) -> RuntimeArtifact:
+    artifact = select_runtime(machine or platform.machine())
+    destination = destination.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() and not destination.is_file():
+        raise RuntimeError(f"DSH runtime wheel cache is not a file: {destination}")
+    if destination.is_file() and _wheel_sha256(destination) == artifact.sha256:
+        return artifact
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{artifact.filename}.", suffix=".tmp", dir=destination.parent
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        _download_runtime(artifact, temporary)
+        actual_sha256 = _wheel_sha256(temporary)
+        if actual_sha256 != artifact.sha256:
+            raise RuntimeError(
+                f"DSH runtime wheel SHA-256 mismatch: expected {artifact.sha256}, "
+                f"got {actual_sha256}"
+            )
+        os.replace(temporary, destination)
+        destination.chmod(0o444)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return artifact
+
+
+def _extract_runtime(
+    destination: Path, artifact: RuntimeArtifact, wheel: Path
+) -> Path:
+    actual_sha256 = _wheel_sha256(wheel)
+    if actual_sha256 != artifact.sha256:
+        raise RuntimeError(
+            f"DSH runtime wheel SHA-256 mismatch: expected {artifact.sha256}, "
+            f"got {actual_sha256}"
+        )
+    with zipfile.ZipFile(wheel) as archive:
+        member = _runtime_member(archive, artifact)
+        runtime_path = destination / "dsh-jsonrpc-agent"
+        with archive.open(member) as source, runtime_path.open("wb") as output:
+            shutil.copyfileobj(source, output)
+    return runtime_path
+
+
+def install_runtime(
+    destination: Path,
+    *,
+    machine: Optional[str] = None,
+    wheel_path: Optional[Path] = None,
 ) -> dict[str, object]:
     artifact = select_runtime(machine or platform.machine())
     destination = destination.resolve()
@@ -110,29 +187,16 @@ def install_runtime(
         )
     destination.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="dsh-runtime-download-") as directory:
-        wheel = Path(directory) / artifact.filename
-        request = urllib.request.Request(
-            artifact.url,
-            headers={"User-Agent": "moi-benchmark-dsh-adapter/1"},
-        )
-        with urllib.request.urlopen(request, timeout=180) as response, wheel.open(
-            "wb"
-        ) as output:
-            shutil.copyfileobj(response, output)
-
-        actual_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
-        if actual_sha256 != artifact.sha256:
-            raise RuntimeError(
-                f"DSH runtime wheel SHA-256 mismatch: expected {artifact.sha256}, "
-                f"got {actual_sha256}"
-            )
-
-        with zipfile.ZipFile(wheel) as archive:
-            member = _runtime_member(archive, artifact)
-            runtime_path = destination / "dsh-jsonrpc-agent"
-            with archive.open(member) as source, runtime_path.open("wb") as output:
-                shutil.copyfileobj(source, output)
+    if wheel_path is not None:
+        wheel = wheel_path.resolve()
+        if not wheel.is_file():
+            raise RuntimeError(f"DSH runtime wheel was not found: {wheel}")
+        runtime_path = _extract_runtime(destination, artifact, wheel)
+    else:
+        with tempfile.TemporaryDirectory(prefix="dsh-runtime-download-") as directory:
+            wheel = Path(directory) / artifact.filename
+            _download_runtime(artifact, wheel)
+            runtime_path = _extract_runtime(destination, artifact, wheel)
 
     runtime_path.chmod(0o555)
     marker: dict[str, object] = {
@@ -156,8 +220,9 @@ def install_runtime(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--destination", type=Path, required=True)
+    parser.add_argument("--wheel", type=Path)
     args = parser.parse_args()
-    marker = install_runtime(args.destination)
+    marker = install_runtime(args.destination, wheel_path=args.wheel)
     print(json.dumps(marker, sort_keys=True, separators=(",", ":")))
     return 0
 

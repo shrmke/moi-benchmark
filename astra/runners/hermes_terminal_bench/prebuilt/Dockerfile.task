@@ -11,24 +11,10 @@ ARG HERMES_RELEASE=0.19.0
 ARG HERMES_REF=v2026.7.20
 ARG HERMES_TEMPERATURE=0.0
 ARG HERMES_TEMPERATURE_CONFIGURATOR_SHA256=89ed14fb6fcb4b68b25cf2fd2300037f94261649e8ab2cd64f97912c841a0f25
+ARG HERMES_TASK_LAYOUT=terminal-only-v2
 ARG TASK_NAME
 
 ENV PATH="/root/.local/bin:/usr/local/bin:${PATH}"
-
-# These are the non-browser packages that the runtime installer would
-# otherwise add on every trial. The exact browser libraries are resolved after
-# copying the frozen Playwright CLI from the shared runtime.
-RUN apt-get -o Acquire::Retries=5 update \
-    && DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-        apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        ffmpeg \
-        git \
-        python3 \
-        ripgrep \
-        xz-utils \
-    && rm -rf /var/lib/apt/lists/*
 
 # --link keeps these content-addressed runtime layers independent of different
 # queued task bases, so Docker stores and reuses each payload only once.
@@ -42,20 +28,11 @@ COPY --link --from=hermes_runtime \
     /root/.hermes/node \
     /root/.hermes/node
 COPY --link --from=hermes_runtime \
-    /root/.cache/ms-playwright \
-    /root/.cache/ms-playwright
-COPY --link --from=hermes_runtime \
     /usr/local/bin/hermes \
     /usr/local/bin/hermes
 COPY --link --from=hermes_runtime \
     /opt/moi/hermes-preinstalled.json \
     /opt/moi/hermes-preinstalled.json
-COPY --link --from=hermes_runtime \
-    /opt/moi/playwright-core \
-    /opt/moi/playwright-core
-COPY --link --from=hermes_runtime \
-    /opt/moi/playwright-version \
-    /opt/moi/playwright-version
 COPY --link --from=hermes_runtime \
     /opt/moi/hermes-temperature \
     /opt/moi/hermes-temperature
@@ -74,11 +51,6 @@ RUN test "${HERMES_TEMPERATURE}" = "0.0" \
     && ln -sfn /root/.hermes/node/bin/node /usr/local/bin/node \
     && ln -sfn /root/.hermes/node/bin/npm /usr/local/bin/npm \
     && ln -sfn /root/.hermes/node/bin/npx /usr/local/bin/npx \
-    && DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-    /root/.hermes/node/bin/node \
-        /opt/moi/playwright-core/cli.js install-deps chromium \
-    && rm -rf /var/lib/apt/lists/* \
-    && test "$(git -C /usr/local/lib/hermes-agent rev-parse HEAD)" = "${HERMES_COMMIT}" \
     && python_real="$(readlink -f \
         /usr/local/lib/hermes-agent/venv/bin/python)" \
     && case "${python_real}" in \
@@ -87,15 +59,15 @@ RUN test "${HERMES_TEMPERATURE}" = "0.0" \
             "${python_real}" >&2; exit 1 ;; \
        esac \
     && test -x "${python_real}" \
+    && if ! command -v python3 >/dev/null 2>&1; then \
+        ln -s "${python_real}" /usr/local/bin/python3; \
+       fi \
+    && test -x "$(command -v python3)" \
+    && test "$(cat /usr/local/lib/hermes-agent/.git/HEAD)" \
+        = "${HERMES_COMMIT}" \
     && test -x /root/.hermes/node/bin/node \
     && test "$(cat /opt/moi/hermes-temperature)" \
         = "${HERMES_TEMPERATURE}" \
-    && printf '%s  %s\n' \
-        "$(cat /opt/moi/hermes-temperature.patch.sha256)" \
-        /opt/moi/hermes-temperature.patch \
-        | sha256sum -c - \
-    && test "$(git -C /usr/local/lib/hermes-agent diff --name-only)" \
-        = "plugins/model-providers/zai/__init__.py" \
     && actual_temperature="$(cd /usr/local/lib/hermes-agent \
         && venv/bin/python -c \
         'from providers import get_provider_profile; print(get_provider_profile("zai").fixed_temperature)')" \
@@ -104,10 +76,6 @@ RUN test "${HERMES_TEMPERATURE}" = "0.0" \
         'import hashlib,json,sys; from pathlib import Path; audit=json.load(open("/opt/moi/hermes-temperature.json")); marker=json.load(open("/opt/moi/hermes-preinstalled.json")); source=Path("/usr/local/lib/hermes-agent/plugins/model-providers/zai/__init__.py").read_bytes(); patch=Path("/opt/moi/hermes-temperature.patch").read_bytes(); assert audit["temperature"] == float(sys.argv[1]) == 0.0; assert audit["scope"] == "primary_zai_chat_completions"; assert hashlib.sha256(source).hexdigest() == audit["patched_source_sha256"]; assert hashlib.sha256(patch).hexdigest() == audit["patch_sha256"]; assert marker["temperature"] == audit["temperature"]; assert marker["temperature_scope"] == audit["scope"]; assert marker["temperature_patch_sha256"] == audit["patch_sha256"]; assert marker["temperature_patched_source_sha256"] == audit["patched_source_sha256"]; assert marker["temperature_configurator_sha256"] == sys.argv[2]' \
         "${HERMES_TEMPERATURE}" \
         "${HERMES_TEMPERATURE_CONFIGURATOR_SHA256}" \
-    && browser="$(find /root/.cache/ms-playwright -type f \
-        \( -name chrome -o -name headless_shell \) \
-        -perm -111 -print -quit)" \
-    && test -n "${browser}" \
     && test "$(readlink -f /usr/local/bin/node)" = "/root/.hermes/node/bin/node" \
     && /usr/local/bin/hermes version \
         | grep -F "Hermes Agent v${HERMES_RELEASE} (${HERMES_REF#v})"
@@ -118,6 +86,7 @@ LABEL org.opencontainers.image.revision="3ef6bbd201263d354fd83ec55b3c306ded2eb72
 LABEL io.moi.hermes-tbench.kind="ephemeral-task"
 LABEL io.moi.hermes-tbench.task="${TASK_NAME}"
 LABEL io.moi.hermes-tbench.base-image="${BASE_IMAGE}"
+LABEL io.moi.hermes-tbench.layout="${HERMES_TASK_LAYOUT}"
 LABEL io.moi.hermes-tbench.temperature="${HERMES_TEMPERATURE}"
 LABEL io.moi.hermes-tbench.temperature-source="provider_profile.fixed_temperature"
 LABEL io.moi.hermes-tbench.temperature-scope="primary_zai_chat_completions"

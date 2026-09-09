@@ -6,7 +6,10 @@ import http.client
 import hmac
 import json
 import os
+import socket
 import ssl
+import struct
+import sys
 import threading
 import time
 from collections.abc import Mapping
@@ -42,6 +45,8 @@ PROVIDER_KEY_ENV_BY_SYSTEM = {
 _LEGACY_SHARED_KEY_ENV = "DEEPSEEK_API_KEY"
 POST_TERMINAL_MODEL_DRAIN_SECONDS = 120.0
 POST_TERMINAL_MODEL_QUIET_SECONDS = 1.0
+_UPSTREAM_POOL_MAX_CONNECTIONS = 4
+_DIAGNOSTIC_TEXT_MAX = 1000
 _DEFAULTED_GENERATION_FIELDS = frozenset(
     {
         "top_p",
@@ -58,6 +63,43 @@ _DEFAULTED_GENERATION_FIELDS = frozenset(
         "parallel_tool_calls",
     }
 )
+
+
+def _diagnostic_text(value: str, secret: str) -> str:
+    return value.replace(secret, "[REDACTED]")[:_DIAGNOSTIC_TEXT_MAX]
+
+
+def _exception_diagnostics(
+    exc: BaseException, *, source: str, secret: str
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "source": source,
+        "type": type(exc).__name__,
+        "message": _diagnostic_text(str(exc), secret),
+    }
+    for field in ("errno", "library", "reason"):
+        value = getattr(exc, field, None)
+        if isinstance(value, (int, str)):
+            result[field] = value
+    if isinstance(exc, http.client.IncompleteRead):
+        result["partial_bytes"] = len(exc.partial)
+        result["expected_bytes"] = exc.expected
+    return result
+
+
+def _provider_error_diagnostics(
+    error: dict[str, Any] | None, *, secret: str
+) -> dict[str, Any] | None:
+    if not error:
+        return None
+    result: dict[str, Any] = {}
+    for field in ("code", "type", "param", "message"):
+        value = error.get(field)
+        if isinstance(value, str):
+            result[field] = _diagnostic_text(value, secret)
+        elif isinstance(value, (int, float, bool)):
+            result[field] = value
+    return result or None
 
 
 def _reported_token(usage: dict[str, Any] | None, *paths: tuple[str, ...]) -> dict[str, Any]:
@@ -424,11 +466,15 @@ class _UsageProbe:
                     candidates.append(value)
         usage: dict[str, Any] | None = None
         provider_response_id: str | None = None
+        provider_error: dict[str, Any] | None = None
         finish_reasons: list[str] = []
         for value in candidates:
             response_id = value.get("id")
             if isinstance(response_id, str) and response_id:
                 provider_response_id = response_id
+            error = value.get("error")
+            if isinstance(error, dict):
+                provider_error = error
             choices = value.get("choices")
             if isinstance(choices, list):
                 for choice in choices:
@@ -445,8 +491,76 @@ class _UsageProbe:
         return {
             "usage": usage,
             "provider_response_id": provider_response_id,
+            "provider_error": provider_error,
             "finish_reasons": finish_reasons,
         }
+
+
+class _UpstreamConnectionPool:
+    def __init__(
+        self,
+        factory: Callable[[], http.client.HTTPConnection],
+        *,
+        maximum: int,
+    ) -> None:
+        self._factory = factory
+        self._maximum = maximum
+        self._condition = threading.Condition()
+        self._idle: list[http.client.HTTPConnection] = []
+        self._created = 0
+        self._closed = False
+
+    def acquire(self) -> tuple[http.client.HTTPConnection, bool]:
+        with self._condition:
+            while True:
+                if self._closed:
+                    raise RuntimeError("upstream connection pool is closed")
+                if self._idle:
+                    return self._idle.pop(), True
+                if self._created < self._maximum:
+                    self._created += 1
+                    break
+                self._condition.wait()
+        try:
+            return self._factory(), False
+        except BaseException:
+            with self._condition:
+                self._created -= 1
+                self._condition.notify()
+            raise
+
+    def release(
+        self, connection: http.client.HTTPConnection, *, reusable: bool
+    ) -> None:
+        close = not reusable
+        with self._condition:
+            if reusable and not self._closed:
+                self._idle.append(connection)
+            else:
+                self._created -= 1
+                close = True
+            self._condition.notify()
+        if close:
+            connection.close()
+
+    def close(self) -> None:
+        with self._condition:
+            if self._closed:
+                return
+            self._closed = True
+            idle = self._idle
+            self._idle = []
+            self._created -= len(idle)
+            self._condition.notify_all()
+        for connection in idle:
+            connection.close()
+
+
+class _ModelProxyHTTPServer(ThreadingHTTPServer):
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
 
 
 class ModelProxyServer:
@@ -454,8 +568,25 @@ class ModelProxyServer:
         self.config = config
         self.budget = RequestBudget(config.max_requests)
         self.audit = _AuditLog(config, self.budget)
+        parsed = urlparse(config.upstream_base_url)
+        if parsed.scheme == "https":
+            context = ssl.create_default_context()
+
+            def connection_factory() -> http.client.HTTPConnection:
+                return http.client.HTTPSConnection(
+                    parsed.hostname, parsed.port, context=context
+                )
+
+        else:
+
+            def connection_factory() -> http.client.HTTPConnection:
+                return http.client.HTTPConnection(parsed.hostname, parsed.port)
+
+        self.upstream_pool = _UpstreamConnectionPool(
+            connection_factory, maximum=_UPSTREAM_POOL_MAX_CONNECTIONS
+        )
         handler = self._handler_type()
-        self.server = ThreadingHTTPServer((host, port), handler)
+        self.server = _ModelProxyHTTPServer((host, port), handler)
         self.server.daemon_threads = True
         self.thread: threading.Thread | None = None
 
@@ -463,6 +594,7 @@ class ModelProxyServer:
         config = self.config
         budget = self.budget
         audit = self.audit
+        upstream_pool = self.upstream_pool
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
@@ -470,6 +602,18 @@ class ModelProxyServer:
 
             def log_message(self, _format: str, *_args: Any) -> None:
                 return
+
+            def _abort_downstream(self) -> None:
+                self.close_connection = True
+                try:
+                    self.connection.setsockopt(
+                        socket.SOL_SOCKET,
+                        socket.SO_LINGER,
+                        struct.pack("ii", 1, 0),
+                    )
+                except OSError:
+                    pass
+                self.connection.close()
 
             def _json(self, status: int, value: Any) -> None:
                 payload = json.dumps(value, separators=(",", ":")).encode("utf-8")
@@ -510,6 +654,7 @@ class ModelProxyServer:
                 self._json(404, {"error": {"code": "proxy_path_not_allowed"}})
 
             def do_POST(self) -> None:  # noqa: N802
+                self._response_started = False
                 path = self.path.split("?", 1)[0]
                 if path not in _CHAT_PATHS:
                     self._json(404, {"error": {"code": "proxy_path_not_allowed"}})
@@ -607,8 +752,24 @@ class ModelProxyServer:
                 provider_header_request_id: str | None = None
                 finish_reasons: list[str] = []
                 error_type: str | None = None
+                transport_diagnostics: dict[str, Any] = {
+                    "phase": "not_started",
+                    "connection_reused": None,
+                    "upstream_http_status": None,
+                    "upstream_content_type": None,
+                    "upstream_content_length": None,
+                    "upstream_chunked": None,
+                    "upstream_will_close": None,
+                    "upstream_body_bytes_read": 0,
+                    "provider_request_id": None,
+                    "provider_response_id": None,
+                    "provider_error": None,
+                    "exception": None,
+                }
                 try:
-                    status, response_metadata = self._forward(path, normalized)
+                    status, response_metadata = self._forward(
+                        path, normalized, transport_diagnostics
+                    )
                     usage = response_metadata["usage"]
                     provider_response_id = response_metadata["provider_response_id"]
                     provider_header_request_id = response_metadata[
@@ -616,11 +777,34 @@ class ModelProxyServer:
                     ]
                     finish_reasons = response_metadata["finish_reasons"]
                     success = 200 <= status < 300
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError) as exc:
                     error_type = "downstream_disconnected"
+                    source = (
+                        "downstream"
+                        if str(transport_diagnostics["phase"]).startswith(
+                            "write_downstream"
+                        )
+                        else "upstream"
+                    )
+                    transport_diagnostics["exception"] = _exception_diagnostics(
+                        exc, source=source, secret=config.upstream_api_key
+                    )
+                    self.close_connection = True
                 except BaseException as exc:
                     error_type = type(exc).__name__
-                    if not self.wfile.closed:
+                    source = (
+                        "downstream"
+                        if str(transport_diagnostics["phase"]).startswith(
+                            "write_downstream"
+                        )
+                        else "upstream"
+                    )
+                    transport_diagnostics["exception"] = _exception_diagnostics(
+                        exc, source=source, secret=config.upstream_api_key
+                    )
+                    if self._response_started:
+                        self._abort_downstream()
+                    elif not self.wfile.closed:
                         try:
                             self._json(
                                 502,
@@ -629,6 +813,14 @@ class ModelProxyServer:
                         except (BrokenPipeError, ConnectionResetError):
                             pass
                 finally:
+                    provider_response_id = (
+                        provider_response_id
+                        or transport_diagnostics["provider_response_id"]
+                    )
+                    provider_header_request_id = (
+                        provider_header_request_id
+                        or transport_diagnostics["provider_request_id"]
+                    )
                     budget.finish(
                         provider_request=provider_request,
                         success=success,
@@ -679,6 +871,7 @@ class ModelProxyServer:
                         usage_reliability="reported" if usage is not None else "missing",
                         token_usage=_token_usage_observations(usage),
                         retry_of=_retry_observation(),
+                        transport_diagnostics=transport_diagnostics,
                         error_type=(
                             reported_observation(error_type, "model_proxy")
                             if error_type
@@ -687,7 +880,10 @@ class ModelProxyServer:
                     )
 
             def _forward(
-                self, request_path: str, body: dict[str, Any]
+                self,
+                request_path: str,
+                body: dict[str, Any],
+                diagnostics: dict[str, Any],
             ) -> tuple[int, dict[str, Any]]:
                 parsed = urlparse(config.upstream_base_url)
                 prefix = parsed.path.rstrip("/")
@@ -695,16 +891,14 @@ class ModelProxyServer:
                 if normalized_path.startswith("/v1/"):
                     normalized_path = normalized_path[3:]
                 target = f"{prefix}{normalized_path}" or "/"
-                connection_type: type[http.client.HTTPConnection]
-                kwargs: dict[str, Any] = {}
-                if parsed.scheme == "https":
-                    connection_type = http.client.HTTPSConnection
-                    kwargs["context"] = ssl.create_default_context()
-                else:
-                    connection_type = http.client.HTTPConnection
-                connection = connection_type(parsed.hostname, parsed.port, **kwargs)
+                diagnostics["phase"] = "acquire_upstream_connection"
+                connection, connection_reused = upstream_pool.acquire()
+                diagnostics["connection_reused"] = connection_reused
+                reusable = False
+                probe = _UsageProbe()
                 payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
                 try:
+                    diagnostics["phase"] = "send_upstream_request"
                     connection.request(
                         "POST",
                         target,
@@ -716,6 +910,7 @@ class ModelProxyServer:
                             "User-Agent": "toolathlon-astra-hermes-evaluation/1",
                         },
                     )
+                    diagnostics["phase"] = "read_upstream_headers"
                     upstream = connection.getresponse()
                     status = upstream.status
                     content_type = upstream.getheader("Content-Type", "application/json")
@@ -723,7 +918,18 @@ class ModelProxyServer:
                     provider_header_request_id = upstream.getheader(
                         "x-request-id"
                     ) or upstream.getheader("x-ds-request-id")
+                    diagnostics["upstream_http_status"] = status
+                    diagnostics["upstream_content_type"] = content_type
+                    diagnostics["upstream_content_length"] = (
+                        int(content_length)
+                        if content_length and content_length.isdecimal()
+                        else None
+                    )
+                    diagnostics["upstream_chunked"] = upstream.chunked
+                    diagnostics["upstream_will_close"] = upstream.will_close
+                    diagnostics["provider_request_id"] = provider_header_request_id
                     chunked = content_length is None
+                    diagnostics["phase"] = "write_downstream_headers"
                     self.send_response(status)
                     self.send_header("Content-Type", content_type)
                     self.send_header("Cache-Control", "no-store")
@@ -731,14 +937,18 @@ class ModelProxyServer:
                         self.send_header("Transfer-Encoding", "chunked")
                     else:
                         self.send_header("Content-Length", content_length)
-                    self.send_header("Connection", "close")
+                    # Declaring Connection: close makes a truncated SSE body look
+                    # like a clean EOF to Node/Undici, hiding the transport error.
                     self.end_headers()
-                    probe = _UsageProbe()
+                    self._response_started = True
+                    diagnostics["phase"] = "read_upstream_body"
                     while True:
-                        chunk = upstream.read(64 * 1024)
+                        chunk = upstream.read1(64 * 1024)
                         if not chunk:
                             break
+                        diagnostics["upstream_body_bytes_read"] += len(chunk)
                         probe.feed(chunk)
+                        diagnostics["phase"] = "write_downstream_body"
                         if chunked:
                             self.wfile.write(f"{len(chunk):X}\r\n".encode("ascii"))
                             self.wfile.write(chunk)
@@ -746,14 +956,26 @@ class ModelProxyServer:
                         else:
                             self.wfile.write(chunk)
                         self.wfile.flush()
+                        diagnostics["phase"] = "read_upstream_body"
+                    upstream.close()
                     if chunked:
+                        diagnostics["phase"] = "write_downstream_terminator"
                         self.wfile.write(b"0\r\n\r\n")
                         self.wfile.flush()
+                    reusable = not upstream.will_close and connection.sock is not None
                     metadata = probe.metadata()
                     metadata["provider_header_request_id"] = provider_header_request_id
+                    diagnostics["phase"] = "complete"
                     return status, metadata
                 finally:
-                    connection.close()
+                    metadata = probe.metadata()
+                    diagnostics["provider_response_id"] = metadata[
+                        "provider_response_id"
+                    ]
+                    diagnostics["provider_error"] = _provider_error_diagnostics(
+                        metadata["provider_error"], secret=config.upstream_api_key
+                    )
+                    upstream_pool.release(connection, reusable=reusable)
 
         return Handler
 
@@ -790,6 +1012,7 @@ class ModelProxyServer:
         self.server.server_close()
         self.thread.join(timeout=5)
         self.thread = None
+        self.upstream_pool.close()
         self.audit.append("proxy.stopped")
 
     def __enter__(self) -> "ModelProxyServer":

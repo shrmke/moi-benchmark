@@ -12,10 +12,13 @@
     providers:
       zai:
         apiKeyEnv: ZAI_API_KEY
+        reasoning: !!js process.env.DSH_REASONING_EFFORT
         streamIdleTimeoutMs: 172800000
         models:
           - id: glm-5.2
             contextWindow: 1000000
+            reasoningEfforts:
+              high: high
 
 - id: terminalbench-profile
   name: './terminalbench-profile.mjs'

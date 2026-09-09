@@ -1,0 +1,6 @@
+services:
+  main:
+    dns:
+      - 8.8.8.8
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

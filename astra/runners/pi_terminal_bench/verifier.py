@@ -5,6 +5,8 @@ import re
 import shlex
 from pathlib import Path
 
+from harbor.models.task.config import TaskOS
+from harbor.models.trial.paths import EnvironmentPaths
 from harbor.verifier.verifier import Verifier
 
 from astra.runners.pi_terminal_bench.verifier_evidence import (
@@ -20,6 +22,15 @@ class VerifierInfrastructureError(RuntimeError):
 
 REMOTE_BOOTSTRAP_ROOT = "/tmp/moi-pi-verifier-bootstrap"
 UV_COMMAND_RE = re.compile(r"^\s*(?:uv|uvx)(?:\s|\\|$)", re.MULTILINE)
+UV_REQUIREMENT_RE = re.compile(r"(?:^|\s)-w\s+([^\s\\]+)")
+OFFLINE_CTRF_REQUIREMENTS = frozenset(
+    {
+        "pytest==8.3.4",
+        "pytest==8.4.1",
+        "pytest==8.4.2",
+        "pytest-json-ctrf==0.3.5",
+    }
+)
 PYTHON_ARCHIVES = {
     "3.11": (
         "cpython-3.11.14+20251014-x86_64-unknown-linux-gnu-"
@@ -90,14 +101,31 @@ class TerminalBenchEvidenceVerifier(Verifier):
             / "20251014"
             / PYTHON_ARCHIVES[python_minor]
         )
+        wheelhouse = root / "wheels"
+        try:
+            wheels = sorted(
+                path
+                for path in wheelhouse.iterdir()
+                if path.suffix == ".whl" and not path.is_symlink()
+            )
+        except OSError as exc:
+            raise VerifierInfrastructureError(
+                f"missing verifier bootstrap wheelhouse: {wheelhouse}"
+            ) from exc
+        if not wheels:
+            raise VerifierInfrastructureError(
+                f"empty verifier bootstrap wheelhouse: {wheelhouse}"
+            )
 
         remote_python_dir = f"{REMOTE_BOOTSTRAP_ROOT}/python-build-standalone/20251014"
+        remote_wheelhouse = f"{REMOTE_BOOTSTRAP_ROOT}/wheels"
         setup = await self.environment.exec(
             command=(
                 f"rm -rf -- {shlex.quote(REMOTE_BOOTSTRAP_ROOT)} && "
                 "install -d -m 0755 "
                 f"{shlex.quote(REMOTE_BOOTSTRAP_ROOT + '/bin')} "
-                f"{shlex.quote(remote_python_dir)} /root/.local/bin && "
+                f"{shlex.quote(remote_python_dir)} "
+                f"{shlex.quote(remote_wheelhouse)} /root/.local/bin && "
                 "printf '%s' \"$PATH\""
             ),
             user="root",
@@ -121,6 +149,10 @@ class TerminalBenchEvidenceVerifier(Verifier):
             await self.environment.upload_file(
                 python_archive, f"{remote_python_dir}/{python_archive.name}"
             )
+            for wheel in wheels:
+                await self.environment.upload_file(
+                    wheel, f"{remote_wheelhouse}/{wheel.name}"
+                )
         except Exception as exc:
             raise VerifierInfrastructureError(
                 "failed to copy the verifier bootstrap cache into the task container"
@@ -149,6 +181,25 @@ class TerminalBenchEvidenceVerifier(Verifier):
                 f"{activate.stderr or activate.stdout or activate.return_code}"
             )
 
+        install_python = await self.environment.exec(
+            command=(
+                "env "
+                f"UV_CACHE_DIR={shlex.quote(REMOTE_BOOTSTRAP_ROOT + '/uv-cache')} "
+                "UV_PYTHON_INSTALL_DIR="
+                f"{shlex.quote(REMOTE_BOOTSTRAP_ROOT + '/python')} "
+                "UV_PYTHON_INSTALL_MIRROR="
+                f"{shlex.quote('file://' + REMOTE_BOOTSTRAP_ROOT + '/python-build-standalone')} "
+                f"{shlex.quote(REMOTE_BOOTSTRAP_ROOT + '/bin/uv')} "
+                f"python install {shlex.quote(python_minor)}"
+            ),
+            user="root",
+        )
+        if install_python.return_code != 0:
+            raise VerifierInfrastructureError(
+                "failed to install cached verifier Python: "
+                f"{install_python.stderr or install_python.stdout or install_python.return_code}"
+            )
+
         original_path = (setup.stdout or "").strip()
         if not original_path:
             raise VerifierInfrastructureError(
@@ -165,16 +216,42 @@ class TerminalBenchEvidenceVerifier(Verifier):
                 "UV_PYTHON_INSTALL_MIRROR": (
                     f"file://{REMOTE_BOOTSTRAP_ROOT}/python-build-standalone"
                 ),
+                "UV_FIND_LINKS": f"file://{remote_wheelhouse}",
+                "PIP_FIND_LINKS": remote_wheelhouse,
             }
         )
+        uv_requirements = frozenset(UV_REQUIREMENT_RE.findall(test_script))
+        if uv_requirements and uv_requirements <= OFFLINE_CTRF_REQUIREMENTS:
+            self.override_env["UV_OFFLINE"] = "1"
         self.logger.info(
             "Prepared local uv 0.9.5 and CPython %s verifier bootstrap cache",
             python_minor,
         )
 
+    async def _make_ctrf_readable(self) -> None:
+        if self.environment.os == TaskOS.WINDOWS:
+            return
+        ctrf_path = str(
+            EnvironmentPaths.for_os(self.environment.os).verifier_dir
+            / "ctrf.json"
+        )
+        quoted_path = shlex.quote(ctrf_path)
+        result = await self.environment.exec(
+            command=(
+                f"if [ -e {quoted_path} ]; then chmod 0644 {quoted_path}; fi"
+            ),
+            user="root",
+        )
+        if result.return_code != 0:
+            raise VerifierInfrastructureError(
+                "failed to make verifier ctrf.json readable: "
+                f"{result.stderr or result.stdout or result.return_code}"
+            )
+
     async def verify(self):
         await self._prepare_bootstrap_cache()
         result = await super().verify()
+        await self._make_ctrf_readable()
         try:
             validate_ctrf_report(self.trial_paths.verifier_dir / "ctrf.json")
             validate_binary_reward(

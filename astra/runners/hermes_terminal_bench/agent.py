@@ -44,8 +44,10 @@ FROZEN_HERMES_INSTALLER_SHA256 = (
 )
 FROZEN_PLAYWRIGHT_RELEASE = "1.62.0"
 FROZEN_MODEL_NAME = "zai/glm-5.2"
+DEEPSEEK_MODEL_NAME = "deepseek/deepseek-v4-flash"
 FROZEN_MAX_TURNS = 90
 REMOTE_PREBUILT_MARKER = "/opt/moi/hermes-preinstalled.json"
+REMOTE_HERMES_PYTHON = "/usr/local/lib/hermes-agent/venv/bin/python"
 REMOTE_ROOT = "/tmp/hermes-c0"
 REMOTE_DRIVER = "/installed-agent/hermes-c0-gateway-driver.py"
 REMOTE_RESULT = "/logs/agent/hermes-run.json"
@@ -64,6 +66,7 @@ REMOTE_POLICY_GUARD_EVIDENCE = "/logs/agent/hermes-policy-guard.jsonl"
 REMOTE_PROCESS_PROBE = "/installed-agent/lifecycle-process-probe.py"
 REMOTE_PREDICATE_PROBE = "/installed-agent/lifecycle-predicate-probe.py"
 _ZAI_KEY_NAMES = ("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY")
+_DEEPSEEK_KEY_NAMES = ("DEEPSEEK_API_KEY",)
 _C0_PRODUCT_TIMEOUT_SEC = {
     "modernize-scientific-stack": 1200,
     "overfull-hbox": 1500,
@@ -179,6 +182,7 @@ class HermesTerminalBenchC0Agent(Hermes):
         poll_interval_sec: float = 0.5,
         gateway_port: int = 18642,
         preinstalled: bool = False,
+        product_timeout_multiplier: float = _C0_PRODUCT_TIMEOUT_MULTIPLIER,
         *args: Any,
         **kwargs: Any,
     ) -> None:
@@ -193,9 +197,20 @@ class HermesTerminalBenchC0Agent(Hermes):
                 f"Hermes C0 requires version {FROZEN_HERMES_VERSION}, "
                 f"got {self.version()!r}"
             )
-        if self.model_name != FROZEN_MODEL_NAME:
+        if self.model_name == FROZEN_MODEL_NAME:
+            self._managed_dir_name = "managed"
+            credential_key_names = _ZAI_KEY_NAMES
+            self._reasoning_effort = "high"
+            self._temperature = 0.0
+        elif self.model_name == DEEPSEEK_MODEL_NAME:
+            self._managed_dir_name = "managed-deepseek"
+            credential_key_names = _DEEPSEEK_KEY_NAMES
+            self._reasoning_effort = "max"
+            self._temperature = None
+        else:
             raise ValueError(
-                f"Hermes C0 requires model {FROZEN_MODEL_NAME}, "
+                "Hermes C0 requires model zai/glm-5.2 or "
+                "deepseek/deepseek-v4-flash, "
                 f"got {self.model_name!r}"
             )
         self.max_turns = int(max_turns)
@@ -208,6 +223,7 @@ class HermesTerminalBenchC0Agent(Hermes):
         self.trigger_timeout_sec = float(trigger_timeout_sec)
         self.poll_interval_sec = float(poll_interval_sec)
         self.gateway_port = int(gateway_port)
+        self.product_timeout_multiplier = float(product_timeout_multiplier)
         if not isinstance(preinstalled, bool):
             raise ValueError("preinstalled must be a boolean")
         self.preinstalled = preinstalled
@@ -222,12 +238,14 @@ class HermesTerminalBenchC0Agent(Hermes):
             )
         if self.trigger_timeout_sec <= 0 or self.poll_interval_sec <= 0:
             raise ValueError("C0 controller timeouts must be positive")
+        if self.product_timeout_multiplier <= 0:
+            raise ValueError("product_timeout_multiplier must be positive")
         if not 1024 <= self.gateway_port <= 65535:
             raise ValueError("gateway_port must be between 1024 and 65535")
 
         self._provider_key_name: str | None = None
         self._provider_key_value: str | None = None
-        for key_name in _ZAI_KEY_NAMES:
+        for key_name in credential_key_names:
             key_value = self._get_env(key_name)
             if key_value:
                 self._provider_key_name = key_name
@@ -235,11 +253,11 @@ class HermesTerminalBenchC0Agent(Hermes):
                 break
         # The model credential is supplied only to the tested product process
         # tree, never to setup, probes, or controller commands.
-        for key_name in _ZAI_KEY_NAMES:
+        for key_name in (*_ZAI_KEY_NAMES, *_DEEPSEEK_KEY_NAMES):
             self._extra_env.pop(key_name, None)
         if not self._provider_key_value:
             raise ValueError(
-                "Hermes C0 requires GLM_API_KEY, ZAI_API_KEY, or Z_AI_API_KEY"
+                f"Hermes C0 requires {credential_key_names[0]}"
             )
 
         self._c0_metadata: dict[str, Any] = {
@@ -267,21 +285,17 @@ class HermesTerminalBenchC0Agent(Hermes):
         config: dict[str, Any] = {"agent": {"max_turns": max_turns}}
         return yaml.dump(config, default_flow_style=False, sort_keys=False)
 
-    @staticmethod
-    def _managed_config_path() -> Path:
-        return Path(__file__).with_name("managed") / "config.yaml"
+    def _managed_config_path(self) -> Path:
+        return Path(__file__).with_name(self._managed_dir_name) / "config.yaml"
 
-    @classmethod
-    def _managed_config_sha256(cls) -> str:
-        return hashlib.sha256(cls._managed_config_path().read_bytes()).hexdigest()
+    def _managed_config_sha256(self) -> str:
+        return hashlib.sha256(self._managed_config_path().read_bytes()).hexdigest()
 
-    @staticmethod
-    def _managed_env_path() -> Path:
-        return Path(__file__).with_name("managed") / ".env"
+    def _managed_env_path(self) -> Path:
+        return Path(__file__).with_name(self._managed_dir_name) / ".env"
 
-    @classmethod
-    def _managed_env_sha256(cls) -> str:
-        return hashlib.sha256(cls._managed_env_path().read_bytes()).hexdigest()
+    def _managed_env_sha256(self) -> str:
+        return hashlib.sha256(self._managed_env_path().read_bytes()).hexdigest()
 
     @staticmethod
     def _policy_guard_path() -> Path:
@@ -312,7 +326,7 @@ class HermesTerminalBenchC0Agent(Hermes):
         product_cwd: str = "/app",
     ) -> list[str]:
         return [
-            "python3",
+            REMOTE_HERMES_PYTHON,
             REMOTE_DRIVER,
             "--instruction-file",
             instruction_path,
@@ -446,9 +460,7 @@ class HermesTerminalBenchC0Agent(Hermes):
                 "release"
             )
         commit_result = await environment.exec(
-            command=(
-                "git -C /usr/local/lib/hermes-agent rev-parse HEAD"
-            ),
+            command="cat /usr/local/lib/hermes-agent/.git/HEAD",
             timeout_sec=10,
         )
         if (
@@ -773,7 +785,7 @@ class HermesTerminalBenchC0Agent(Hermes):
             trigger_registration_status = "generic"
             trigger_scope = "generic_product_live"
             configured_product_timeout_sec = (
-                base_timeout_sec * _C0_PRODUCT_TIMEOUT_MULTIPLIER
+                base_timeout_sec * self.product_timeout_multiplier
             )
         else:
             task_id = trigger.task_id
@@ -791,7 +803,7 @@ class HermesTerminalBenchC0Agent(Hermes):
                         "Harbor task"
                     )
                 configured_product_timeout_sec = (
-                    base_timeout_sec * _C0_PRODUCT_TIMEOUT_MULTIPLIER
+                    base_timeout_sec * self.product_timeout_multiplier
                 )
             else:
                 configured_product_timeout_sec = _C0_PRODUCT_TIMEOUT_SEC[
@@ -855,7 +867,7 @@ class HermesTerminalBenchC0Agent(Hermes):
                 configured_product_timeout_sec
             ),
             "product_timeout_multiplier": (
-                _C0_PRODUCT_TIMEOUT_MULTIPLIER
+                self.product_timeout_multiplier
             ),
             "product_timeout_sec": product_timeout_sec,
             "outer_cleanup_timeout_sec": outer_timeout_sec,
@@ -897,6 +909,9 @@ class HermesTerminalBenchC0Agent(Hermes):
             "yolo_enabled": False,
             "accept_hooks_enabled": False,
             "hermes_session_id": session_id,
+            "hermes_model": self.model_name,
+            "hermes_reasoning_effort": self._reasoning_effort,
+            "hermes_temperature": self._temperature,
             "trajectory_capture_required": True,
             "trajectory_capture_mode": "streaming_runs_api_jsonl",
             "trajectory_session_export_required": True,

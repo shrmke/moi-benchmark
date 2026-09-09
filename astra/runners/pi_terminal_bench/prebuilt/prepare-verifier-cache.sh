@@ -30,7 +30,8 @@ done
 mkdir -p \
   "${cache_root}/bin" \
   "${cache_root}/downloads" \
-  "${cache_root}/python-build-standalone/${python_release}"
+  "${cache_root}/python-build-standalone/${python_release}" \
+  "${cache_root}/wheels"
 
 curl_args=(
   --fail
@@ -87,5 +88,36 @@ for asset in "${python_assets[@]}"; do
     "${target}"
   tar -tzf "${target}" >/dev/null
 done
+
+wheelhouse="${cache_root}/wheels"
+wheelhouse_marker="${wheelhouse}/.ctrf-bootstrap-v1.complete"
+wheelhouse_ready() {
+  compgen -G "${wheelhouse}/pytest-8.3.4-*.whl" >/dev/null \
+    && compgen -G "${wheelhouse}/pytest-8.4.1-*.whl" >/dev/null \
+    && compgen -G "${wheelhouse}/pytest-8.4.2-*.whl" >/dev/null \
+    && compgen -G "${wheelhouse}/pytest_json_ctrf-0.3.5-*.whl" >/dev/null
+}
+if [[ ! -f "${wheelhouse_marker}" ]] || ! wheelhouse_ready; then
+  pip_download_args=(
+    --disable-pip-version-check
+    --dest "${wheelhouse}"
+    --only-binary=:all:
+  )
+  if [[ -n "${cache_proxy}" ]]; then
+    pip_download_args+=(--proxy "${cache_proxy}")
+  fi
+  for requirement in \
+    pytest==8.3.4 \
+    pytest==8.4.1 \
+    pytest==8.4.2 \
+    pytest-json-ctrf==0.3.5; do
+    python3 -m pip download "${pip_download_args[@]}" "${requirement}"
+  done
+  wheelhouse_ready
+  printf '%s\n' \
+    'pytest=8.3.4,8.4.1,8.4.2' \
+    'pytest-json-ctrf=0.3.5' \
+    > "${wheelhouse_marker}"
+fi
 
 echo "Verifier bootstrap cache ready: ${cache_root}"

@@ -1,12 +1,12 @@
 model:
-  default: glm-5.2
-  provider: zai
+  default: deepseek-v4-flash
+  provider: deepseek
 toolsets:
   - hermes-cli
 agent:
   max_turns: 90
   gateway_timeout: 24000
-  reasoning_effort: high
+  reasoning_effort: max
 memory:
   memory_enabled: false
   user_profile_enabled: false

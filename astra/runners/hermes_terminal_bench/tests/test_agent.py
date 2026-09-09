@@ -22,11 +22,13 @@ from harbor.models.agent.context import AgentContext
 from harbor.trial.trial import Trial
 
 from astra.runners.hermes_terminal_bench.agent import (
+    DEEPSEEK_MODEL_NAME,
     FROZEN_HERMES_VERSION,
     FROZEN_MAX_TURNS,
     FROZEN_MODEL_NAME,
     FROZEN_PLAYWRIGHT_RELEASE,
     HermesTerminalBenchC0Agent,
+    REMOTE_HERMES_PYTHON,
     _ENSURE_PYTHON3_COMMAND,
 )
 from astra.runners.hermes_terminal_bench.prebuilt.configure_temperature import (
@@ -51,6 +53,56 @@ class HermesC0AgentTests(unittest.TestCase):
 
         self.assertNotIn("GLM_API_KEY", agent._extra_env)
         self.assertNotIn("GLM_API_KEY", agent._product_env())
+
+    def test_glm52_managed_profile_uses_high_effort(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self._agent(directory)
+            managed = yaml.safe_load(
+                agent._managed_config_path().read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(managed["agent"]["reasoning_effort"], "high")
+        self.assertEqual(agent._reasoning_effort, "high")
+
+    def test_deepseek_flash_managed_profile_uses_max_effort(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = HermesTerminalBenchC0Agent(
+                logs_dir=Path(directory),
+                model_name=DEEPSEEK_MODEL_NAME,
+                version=FROZEN_HERMES_VERSION,
+                extra_env={"DEEPSEEK_API_KEY": "offline-placeholder"},
+            )
+            managed = yaml.safe_load(
+                agent._managed_config_path().read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(managed["model"]["provider"], "deepseek")
+        self.assertEqual(managed["model"]["default"], "deepseek-v4-flash")
+        self.assertEqual(managed["agent"]["reasoning_effort"], "max")
+        self.assertEqual(agent._reasoning_effort, "max")
+        self.assertIsNone(agent._temperature)
+        self.assertNotIn("DEEPSEEK_API_KEY", agent._extra_env)
+
+    def test_product_timeout_multiplier_is_configurable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(self._agent(directory).product_timeout_multiplier, 2.0)
+            agent = HermesTerminalBenchC0Agent(
+                logs_dir=Path(directory),
+                model_name=FROZEN_MODEL_NAME,
+                version=FROZEN_HERMES_VERSION,
+                product_timeout_multiplier=1.0,
+                extra_env={"GLM_API_KEY": "offline-placeholder"},
+            )
+            self.assertEqual(agent.product_timeout_multiplier, 1.0)
+
+            with self.assertRaisesRegex(ValueError, "must be positive"):
+                HermesTerminalBenchC0Agent(
+                    logs_dir=Path(directory),
+                    model_name=FROZEN_MODEL_NAME,
+                    version=FROZEN_HERMES_VERSION,
+                    product_timeout_multiplier=0,
+                    extra_env={"GLM_API_KEY": "offline-placeholder"},
+                )
 
     def test_provider_key_is_delayed_until_harbor_final_scrub(self) -> None:
         for key_name in ("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"):
@@ -310,10 +362,20 @@ class HermesC0AgentTests(unittest.TestCase):
             script,
         )
         self.assertIn("verify_task_image()", script)
-        self.assertIn("--no-cache", script)
+        self.assertNotIn("--no-cache", script)
         self.assertIn("docker image rm --force", script)
         self.assertIn("at least one task or --queue-file is required", script)
         self.assertIn('[[ "${driver}" == "docker" ]]', script)
+        self.assertIn('BUILD_PROXY="${HERMES_TBENCH_BUILD_PROXY:-}"', script)
+        self.assertEqual(
+            script.count('"${BUILD_NETWORK_ARGS[@]}"'),
+            2,
+        )
+        self.assertEqual(
+            script.count('"${BUILD_PROXY_ARGS[@]}"'),
+            2,
+        )
+        self.assertIn('--build-arg "HTTPS_PROXY=${BUILD_PROXY}"', script)
         self.assertIn(
             "refusing to overwrite unrecognized runtime image",
             script,
@@ -322,7 +384,7 @@ class HermesC0AgentTests(unittest.TestCase):
             'io.moi.hermes-tbench.kind="ephemeral-task"',
             task_dockerfile,
         )
-        self.assertIn("install-deps --dry-run chromium", script)
+        self.assertNotIn("install-deps --dry-run chromium", script)
         self.assertIn(
             "FROM ${HERMES_RUNTIME_IMAGE} AS hermes_runtime",
             task_dockerfile,
@@ -350,6 +412,18 @@ class HermesC0AgentTests(unittest.TestCase):
             "ln -sfn /root/.hermes/node/bin/node /usr/local/bin/node",
             task_dockerfile,
         )
+        self.assertNotIn(
+            'ln -sfn "${python_real}" /usr/local/bin/python3',
+            task_dockerfile,
+        )
+        self.assertIn(
+            "if ! command -v python3 >/dev/null 2>&1",
+            task_dockerfile,
+        )
+        self.assertIn(
+            'ln -s "${python_real}" /usr/local/bin/python3',
+            task_dockerfile,
+        )
         self.assertIn(
             'readlink -f /usr/local/bin/node',
             script,
@@ -359,7 +433,14 @@ class HermesC0AgentTests(unittest.TestCase):
             5,
         )
         self.assertEqual(runtime_dockerfile.count("Acquire::Retries=5"), 2)
-        self.assertEqual(task_dockerfile.count("Acquire::Retries=5"), 2)
+        self.assertNotIn("apt-get", task_dockerfile)
+        self.assertNotIn("ms-playwright", task_dockerfile)
+        self.assertIn('TASK_LAYOUT="terminal-only-v2"', script)
+        self.assertIn(
+            'io.moi.hermes-tbench.layout="${HERMES_TASK_LAYOUT}"',
+            task_dockerfile,
+        )
+        self.assertIn("Reusing verified task image", script)
 
     def test_prebuilt_temperature_is_frozen_and_audited(self) -> None:
         root = Path("astra/runners/hermes_terminal_bench/prebuilt")
@@ -923,6 +1004,8 @@ if args[:2] == ["image", "inspect"]:
             "kind": "runtime",
             "revision": "{frozen_commit}",
             "task": "",
+            "base_image": "",
+            "layout": "",
             "temperature": "0.0",
             "temperature_scope": "primary_zai_chat_completions",
             "temperature_patch_sha256": "6b71f1395a6533af731c506ceaed3dab885b04055bd3bc05eae696ba9786339a",
@@ -945,6 +1028,10 @@ if args[:2] == ["image", "inspect"]:
             print(data["kind"])
         elif "io.moi.hermes-tbench.task" in template:
             print(data["task"])
+        elif "io.moi.hermes-tbench.base-image" in template:
+            print(data["base_image"])
+        elif "io.moi.hermes-tbench.layout" in template:
+            print(data["layout"])
         elif "org.opencontainers.image.revision" in template:
             print(data["revision"])
         elif "io.moi.hermes-tbench.temperature-configurator-sha256" in template:
@@ -967,6 +1054,8 @@ if args[:2] == ["buildx", "inspect"]:
 if args[:2] == ["buildx", "build"]:
     image = args[args.index("--tag") + 1]
     task_name = ""
+    base_image = ""
+    layout = ""
     temperature = ""
     temperature_configurator_sha256 = ""
     for index, value in enumerate(args):
@@ -975,6 +1064,10 @@ if args[:2] == ["buildx", "build"]:
         build_arg = args[index + 1]
         if build_arg.startswith("TASK_NAME="):
             task_name = build_arg.split("=", 1)[1]
+        elif build_arg.startswith("BASE_IMAGE="):
+            base_image = build_arg.split("=", 1)[1]
+        elif build_arg.startswith("HERMES_TASK_LAYOUT="):
+            layout = build_arg.split("=", 1)[1]
         elif build_arg.startswith("HERMES_TEMPERATURE="):
             temperature = build_arg.split("=", 1)[1]
         elif build_arg.startswith("HERMES_TEMPERATURE_CONFIGURATOR_SHA256="):
@@ -984,6 +1077,8 @@ if args[:2] == ["buildx", "build"]:
             "kind": "ephemeral-task",
             "revision": "{frozen_commit}",
             "task": task_name,
+            "base_image": base_image,
+            "layout": layout,
             "temperature": temperature,
             "temperature_scope": "primary_zai_chat_completions",
             "temperature_patch_sha256": "6b71f1395a6533af731c506ceaed3dab885b04055bd3bc05eae696ba9786339a",
@@ -1266,6 +1361,7 @@ raise SystemExit(17 if task_name == "modernize-scientific-stack" else 0)
             )
 
         command = " ".join(argv)
+        self.assertEqual(argv[0], REMOTE_HERMES_PYTHON)
         self.assertIn("/tmp/run/provider.json", command)
         self.assertNotIn("offline-placeholder", command)
         self.assertNotIn("GLM_API_KEY", command)
@@ -1408,7 +1504,7 @@ class PreinstalledHermesTests(unittest.IsolatedAsyncioTestCase):
 
             class Environment:
                 async def exec(self, command, **_kwargs):
-                    if command.startswith("cat "):
+                    if command == "cat /opt/moi/hermes-preinstalled.json":
                         return SimpleNamespace(
                             return_code=0,
                             stdout=marker_text,
@@ -1426,7 +1522,7 @@ class PreinstalledHermesTests(unittest.IsolatedAsyncioTestCase):
                                 "Install method: git\n"
                             ),
                         )
-                    if command.endswith("rev-parse HEAD"):
+                    if command.endswith(".git/HEAD"):
                         return SimpleNamespace(
                             return_code=0,
                             stdout=(
@@ -1471,7 +1567,7 @@ class PreinstalledHermesTests(unittest.IsolatedAsyncioTestCase):
 
             class Environment:
                 async def exec(self, command, **_kwargs):
-                    if command.startswith("cat "):
+                    if command == "cat /opt/moi/hermes-preinstalled.json":
                         return SimpleNamespace(
                             return_code=0,
                             stdout=json.dumps(
@@ -1488,7 +1584,7 @@ class PreinstalledHermesTests(unittest.IsolatedAsyncioTestCase):
                             return_code=0,
                             stdout="Hermes Agent v0.19.0 (2026.7.20)\n",
                         )
-                    if command.endswith("rev-parse HEAD"):
+                    if command.endswith(".git/HEAD"):
                         return SimpleNamespace(
                             return_code=0,
                             stdout="wrong\n",
@@ -1579,7 +1675,7 @@ class PreinstalledHermesTests(unittest.IsolatedAsyncioTestCase):
                             return_code=0,
                             stdout="Hermes Agent v0.19.0 (2026.7.20)\n",
                         )
-                    if command.endswith("rev-parse HEAD"):
+                    if command.endswith(".git/HEAD"):
                         return SimpleNamespace(
                             return_code=0,
                             stdout=(
