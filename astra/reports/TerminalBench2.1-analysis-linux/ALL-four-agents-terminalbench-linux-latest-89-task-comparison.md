@@ -35,6 +35,7 @@ Hermes通过率远低于预期，不排除模型、环境的短期波动情况�
 | 配置项                  | Astra                                                      | DSH                                                        | Hermes                                                     | PI                                                         |
 | ----------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
 | 版本                    | astra 0.1.0                                                | 0.1.0rc6                                                   | v2026.7.20                                                 | 0.73.1                                                     |
+| Astra 产品 commit（README 登记） | `969550b611ceba11653c4b2651079bcb85d1c24e` | — | — | — |
 | 模型                    | glm-5.2(thinking:high)                                     | zai/glm-5.2                                                | zai/glm-5.2                                                | zai/glm-5.2                                                |
 | 思考/采样配置           | thinking=high；                                            | thinking=high；temperature=0；                             | reasoning_effort=high；temperature=0                       | thinking=high                                              |
 | 产品 timeout            | 数据集预算 × 1.0                                          | 数据集预算 × 1.0                                          | 数据集预算 × 1.0                                          | 数据集预算 × 1.0                                          |
@@ -56,6 +57,8 @@ Hermes通过率远低于预期，不排除模型、环境的短期波动情况�
 | Docker Engine  | 29.1.3                                                                                                        |
 | 容器运行环境   | Linux/x86_64；存储驱动 overlayfs；cgroup v2；cgroup driver=systemd                                            |
 | 评测并发与调度 | 沿用上方各框架配置；原报告中的 6 CPU / 3 memory token 是调度预算，memory token 不是 GiB，也不等于整台 VM 容量 |
+
+Astra 产品 commit 来源于本仓库 [Astra README](../../README.md) 的 Linux 评测版本登记；它是 Astra 产品源码版本，不是 moi-benchmark 报告或 runner 的提交号。本次文档更新未逐一重新核验 89 个 trial 的二进制构建溯源。
 
 - 四份 CSV 各有 89 个唯一 task，任务集合与难度标注完全一致。每题每框架沿用源报告选中的最后一个尝试，不重新选择历史最好结果。
 - Astra、DSH、Hermes、PI 源报告的数据集 commit 均为 5c8eadf1f393183288fa08b8f73ca9a469cc5e00；

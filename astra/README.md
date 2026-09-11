@@ -1,6 +1,6 @@
 # Astra Agent 产品评测
 
-状态：v0.5 总体方案草稿待审阅；Terminal-Bench 2.1 与 Toolathlon 已形成四产品常规任务结果，其中 Linux Terminal-Bench 2.1 的 Astra 仍在运行。本目录同时保存运行配置、进度、分析材料和可审计的轨迹记录。
+状态：v0.5 总体方案草稿待审阅；Terminal-Bench 2.1 与 Toolathlon 已形成四产品常规任务结果，其中 Linux Terminal-Bench 2.1 的四产品均已完成 89 题评测。本目录同时保存运行配置、进度、分析材料和可审计的轨迹记录。
 
 当前材料：
 
@@ -27,7 +27,7 @@
 
 `complete` 要求轨迹保存成功、存在终止事件证据、工具调用与结果完整配对，并具有有效 verifier；reward 为 `0` 或 `1` 均可，因此该分层表示轨迹完整性，不等同于任务成功。`partial` 表示 trial 已结束且包含有效对话，但尚未满足全部完整性条件。
 
-清洗过程省略隐藏 reasoning/thinking 内容，移除图片 base64，并对常见私钥、访问令牌及本机绝对路径进行脱敏。详细 schema、分类规则和复现命令见[轨迹数据说明](datasets/linux-terminal-bench-trajectory/README.md)，逐项统计见[质量报告](datasets/linux-terminal-bench-trajectory/quality_report.json)。清洗器已支持 Astra 当前轨迹格式；本批数据尚不包含仍在运行的 Astra 结果，待运行结束后可通过同一流程接入。
+清洗过程省略隐藏 reasoning/thinking 内容，移除图片 base64，并对常见私钥、访问令牌及本机绝对路径进行脱敏。详细 schema、分类规则和复现命令见[轨迹数据说明](datasets/linux-terminal-bench-trajectory/README.md)，逐项统计见[质量报告](datasets/linux-terminal-bench-trajectory/quality_report.json)。清洗器已支持 Astra 当前轨迹格式；本批数据尚不包含 Astra；Astra 的 89 题评测已完成，结果及补充 trace 已用于分析报告，后续可通过同一清洗流程接入轨迹数据集。
 
 ## 当前公开基准结果
 
@@ -46,14 +46,16 @@ Mac 结果固定为排除 `tune-mjcf` 的 88 题历史最新记录。Astra 有 2
 
 ### Terminal-Bench 2.1：Linux 结果
 
-Linux 使用包含 `tune-mjcf` 的 89 题 cohort、1.0× 产品预算和单产品任务并行。Hermes、PI、DSH 已完成；Astra 使用 commit `969550b611ceba11653c4b2651079bcb85d1c24e`，仍在运行。Astra 行是截至 `2026-09-09 09:55 UTC` 的中间快照，不能与三个完整结果直接排名。
+Linux 使用包含 `tune-mjcf` 的 89 题 cohort、1.0× 产品预算和单产品任务并行。四产品均已完成，89/89 题各有有效 verifier。Astra 使用 commit `969550b611ceba11653c4b2651079bcb85d1c24e`，按 latest-results 选中的每题最新结果汇总为 **48/89（53.93%）**。
 
 | 产品 | verifier pass | 有效 verifier | 有效 verifier 通过率 | 状态 |
 | --- | ---: | ---: | ---: | --- |
-| Astra | 1 | 6/89 | 16.67% | 运行中 |
+| Astra | 48 | 89/89 | 53.93% | 已完成 |
 | Hermes | 34 | 89/89 | 38.20% | 已完成 |
 | PI | 52 | 89/89 | 58.43% | 已完成 |
 | DSH | 49 | 89/89 | 55.06% | 已完成 |
+
+Astra 选中结果结束时间截至 2026-09-11T07:49:26.415917Z，全部标记 formal_score_eligible=false，属于探索性结果汇总。不同产品运行日期、重试与环境修复状态不同，不视为完全同步、同环境的受控实验。Astra 的 Token 与工具统计优先采用 63 题完整原生汇总，其余 26 题使用同 session 的数据库 trace 补充；已观测 Token 总量按下界解释。
 
 Mac 与 Linux 的 Astra 使用不同 commit，当前结果不应解释为同版本跨操作系统对照。
 
@@ -71,6 +73,8 @@ Mac 与 Linux 的 Astra 使用不同 commit，当前结果不应解释为同版�
 详细结果：
 
 - [Terminal-Bench 2.1 macOS 四产品对比](reports/TerminalBench2.1-analysis-mac/TerminalBench-comparison-astra_hermes_pi_dsh.md)
+- [Terminal-Bench 2.1 Linux 四产品对比](reports/TerminalBench2.1-analysis-linux/ALL-four-agents-terminalbench-linux-latest-89-task-comparison.md)
+- [Terminal-Bench 2.1 Linux Astra 报告](reports/TerminalBench2.1-analysis-linux/astra-terminalbench-linux-latest-89-task-report.md)
 - [Terminal-Bench 2.1 Linux DSH 报告](reports/TerminalBench2.1-analysis-linux/dsh-terminalbench-linux-latest-89-task-report.md)
 - [Terminal-Bench 2.1 Linux Hermes 报告](reports/TerminalBench2.1-analysis-linux/hermes-terminalbench-linux-latest-89-task-report.md)
 - [Terminal-Bench 2.1 Linux PI 报告](reports/TerminalBench2.1-analysis-linux/pi-terminalbench-linux-latest-89-task-report.md)
