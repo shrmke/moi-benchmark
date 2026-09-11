@@ -16,18 +16,19 @@
 
 ## Terminal-Bench 2.1 轨迹数据
 
-当前轨迹数据包含 DSH、Hermes 和 PI 在 Terminal-Bench 2.1 上的 300 条有效 trial，统一为 `user`、`assistant`、`tool` 消息结构。数据仅保留 `complete` 和 `partial` 两个 split；只有运行元数据、没有有效用户与助手对话的记录不会发布。
+当前清洗数据包含 Astra、DSH、Hermes 和 PI 在 Terminal-Bench 2.1 上的 433 条有效 trial，共 22,951 条标准化消息和 11,595 次工具调用。消息统一为 `user`、`assistant`、`tool` 结构；数据仅发布 `complete` 和 `partial` 两个 split，另有 95 条只有运行元数据或缺少有效用户/助手对话的记录未发布。
 
 | 产品   | complete | partial | 合计 |
 | ------ | -------: | ------: | ---: |
+| Astra  |      106 |      27 |  133 |
 | DSH    |       68 |      27 |   95 |
 | Hermes |       98 |      10 |  108 |
 | PI     |       57 |      40 |   97 |
-| 合计   |      223 |      77 |  300 |
+| 合计   |      329 |     104 |  433 |
 
-`complete` 要求轨迹保存成功、存在终止事件证据、工具调用与结果完整配对，并具有有效 verifier；reward 为 `0` 或 `1` 均可，因此该分层表示轨迹完整性，不等同于任务成功。`partial` 表示 trial 已结束且包含有效对话，但尚未满足全部完整性条件。
+`complete` 表示清洗器已有充分的轨迹采集完整性证据，不表示任务通过，reward 为 `0` 的轨迹也可以属于 `complete`。Astra 补充轨迹按 `run_id` 将数据库 transcript 与终止事件中的工具调用计数逐段核对；所有 run 均有可比较计数且完全一致时进入 `complete`。Astra 的 verifier 有效性独立记录，不降级已证明完整的轨迹；其余 27 条因计数不一致、事件覆盖不足或 native 回退无法交叉核对而保留为 `partial`。DSH、Hermes 和 PI 仍按轨迹保存、终止事件、工具配对和 verifier 有效性共同判定。
 
-清洗过程省略隐藏 reasoning/thinking 内容，移除图片 base64，并对常见私钥、访问令牌及本机绝对路径进行脱敏。详细 schema、分类规则和复现命令见[轨迹数据说明](datasets/linux-terminal-bench-trajectory/README.md)，逐项统计见[质量报告](datasets/linux-terminal-bench-trajectory/quality_report.json)。清洗器已支持 Astra 当前轨迹格式；本批数据尚不包含 Astra；Astra 的 89 题评测已完成，结果及补充 trace 已用于分析报告，后续可通过同一清洗流程接入轨迹数据集。
+清洗过程省略隐藏 reasoning/thinking 内容，移除图片 base64，并对常见私钥、访问令牌及本机绝对路径进行脱敏。详细 schema、分类规则、逐项统计和复现命令见[轨迹数据说明](datasets/linux-terminal-bench-trajectory/README.md)及[质量报告](datasets/linux-terminal-bench-trajectory/quality_report.json)。
 
 ## Linux Terminal-Bench 2.1 复现
 

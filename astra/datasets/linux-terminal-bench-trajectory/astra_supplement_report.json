@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-09-11T09:46:45.702637+00:00",
+  "source": "astra/trace-supplements/all-verifier-attempts",
+  "statistics": {
+    "discovered_trials": 146,
+    "complete": 106,
+    "partial": 27,
+    "retained": 133,
+    "excluded_metadata_only": 13,
+    "excluded_reason_counts_nonexclusive": {
+      "metadata_only_missing_user_or_assistant": 13
+    },
+    "partial_reason_counts_nonexclusive": {
+      "supplement_coverage_unproven": 27
+    },
+    "messages": 6432,
+    "tool_calls": 3084,
+    "redactions": 73
+  },
+  "database_sources": {
+    "old": 73,
+    "current": 55,
+    "native-artifact": 5
+  },
+  "excluded": [
+    {
+      "record_id": "astra/mcmc-sampling-stan__oyAMbVw",
+      "reason": "metadata_only_missing_user_or_assistant"
+    },
+    {
+      "record_id": "astra/rstan-to-pystan__zXK7W2G",
+      "reason": "metadata_only_missing_user_or_assistant"
+    },
+    {
+      "record_id": "astra/bn-fit-modify__VstGjDE",
+      "reason": "metadata_only_missing_user_or_assistant"
+    },
+    {
+      "record_id": "astra/circuit-fibsqrt__9tLTTPJ",
+      "reason": "metadata_only_missing_user_or_assistant"
+    },
+    {
+      "record_id": "astra/distribution-search__jMJGFg6",
+      "reason": "metadata_only_missing_user_or_assistant"
+    },
+    {
+      "record_id": "astra/sanitize-git-repo__dGyFT7P",
+      "reason": "metadata_only_missing_user_or_assistant"
+    },
+    {
+      "record_id": "astra/code-from-image__8HrFZrH",
+      "reason": "metadata_only_missing_user_or_assistant"
+    },
+    {
+      "record_id": "astra/extract-moves-from-video__4RSxtS2",
+      "reason": "metadata_only_missing_user_or_assistant"
+    },
+    {
+      "record_id": "astra/path-tracing-reverse__RjdNrMA",
+      "reason": "metadata_only_missing_user_or_assistant"
+    },
+    {
+      "record_id": "astra/schemelike-metacircular-eval__NmivDsF",
+      "reason": "metadata_only_missing_user_or_assistant"
+    },
+    {
+      "record_id": "astra/model-extraction-relu-logits__xRRCTiH",
+      "reason": "metadata_only_missing_user_or_assistant"
+    },
+    {
+      "record_id": "astra/model-extraction-relu-logits__geJXhqN",
+      "reason": "metadata_only_missing_user_or_assistant"
+    },
+    {
+      "record_id": "astra/rstan-to-pystan__wmM63EM",
+      "reason": "metadata_only_missing_user_or_assistant"
+    }
+  ],
+  "scope": "inventory.json only; canonical database transcripts with native fallback; no cross-source concatenation"
+}

@@ -1,7 +1,23 @@
 {
   "dataset_revision": "5c8eadf1f393183288fa08b8f73ca9a469cc5e00",
-  "generated_at": "2026-09-09T09:31:52.279354+00:00",
+  "generated_at": "2026-09-11T09:46:45.702637+00:00",
   "products": {
+    "astra": {
+      "discovered_trials": 146,
+      "complete": 106,
+      "partial": 27,
+      "retained": 133,
+      "excluded_metadata_only": 13,
+      "excluded_reason_counts_nonexclusive": {
+        "metadata_only_missing_user_or_assistant": 13
+      },
+      "partial_reason_counts_nonexclusive": {
+        "supplement_coverage_unproven": 27
+      },
+      "messages": 6432,
+      "tool_calls": 3084,
+      "redactions": 73
+    },
     "dsh": {
       "complete": 68,
       "discovered_trials": 135,
@@ -80,13 +96,14 @@
   },
   "source_root": "<WORKSPACE>/work/linux-terminal-bench",
   "totals": {
-    "complete": 223,
-    "discovered_trials": 382,
-    "excluded_metadata_only": 82,
-    "messages": 16519,
-    "partial": 77,
-    "redactions": 144,
-    "retained": 300,
-    "tool_calls": 8511
-  }
+    "discovered_trials": 528,
+    "complete": 329,
+    "partial": 104,
+    "retained": 433,
+    "excluded_metadata_only": 95,
+    "messages": 22951,
+    "tool_calls": 11595,
+    "redactions": 217
+  },
+  "astra_source": "astra/trace-supplements/all-verifier-attempts"
 }

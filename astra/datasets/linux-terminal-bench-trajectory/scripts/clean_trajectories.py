@@ -728,6 +728,22 @@ def task_id(trial: Path, result: dict[str, Any] | None) -> str:
     return trial.name.rsplit("__", 1)[0]
 
 
+def verifier_counts(trial: Path) -> dict[str, int | None]:
+    report = load_json(trial / "verifier" / "ctrf.json") or {}
+    results = report.get("results")
+    summary = results.get("summary") if isinstance(results, dict) else None
+    return {
+        f"verifier_{status}": (
+            summary[status]
+            if isinstance(summary, dict)
+            and type(summary.get(status)) is int
+            and summary[status] >= 0
+            else None
+        )
+        for status in ("passed", "failed")
+    }
+
+
 def trials(product_root: Path) -> list[Path]:
     jobs = product_root / "jobs"
     if not jobs.is_dir():
@@ -849,6 +865,7 @@ def build_record(
             "reward": reward,
             "raw_structured_reward": raw_reward,
             "verifier_valid": verifier_valid,
+            **verifier_counts(trial),
             "product_status": md.get("product_terminal_status"),
             "exception_type": exception_type,
         },
@@ -998,7 +1015,7 @@ def validate(records: list[dict[str, Any]]) -> None:
                 quality["terminal_evidence"],
                 quality["capture_complete"],
                 quality["tool_calls_paired"],
-                quality["verifier_valid"],
+                quality["verifier_valid"] or quality.get("verifier_independent_tier", False),
             )
         ):
             raise ValueError(f"complete quality mismatch: {record_id}")
