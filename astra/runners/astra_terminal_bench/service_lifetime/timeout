@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Register only the native Astra environment-background timeout invocation."""
+import json
+import os
+from pathlib import Path
+import re
+import sys
+
+args = sys.argv[1:]
+selected = (
+    os.environ.get('MOI_SERVICE_LIFETIME') == 'container'
+    and len(args) == 6
+    and args[:2] == ['--signal=TERM', '--kill-after=5s']
+    and re.fullmatch(r'[0-9]+(?:\.[0-9]+)?s', args[2]) is not None
+    and args[3:5] == ['bash', '-c']
+)
+if selected:
+    # Native environment tasks redirect both streams to env-bg-* files.
+    out = os.readlink('/proc/self/fd/1')
+    err = os.readlink('/proc/self/fd/2')
+    selected = (Path(out).name.startswith('env-bg-')
+                and out.endswith('.stdout')
+                and err == out[:-7] + '.stderr')
+if selected:
+    pid = os.getpid()
+    fields = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()
+    if os.getsid(0) != pid or os.getpgrp() != pid:
+        raise SystemExit('Environment service must have its own process group/session')
+    registry = Path('/opt/moi-service-lifetime/registry')
+    registry.mkdir(mode=0o700, parents=True, exist_ok=True)
+    record = {
+        'pid': pid, 'start_ticks': int(fields[19]), 'pgid': pid, 'sid': pid,
+        'requested_ttl_seconds': float(args[2][:-1]),
+        'effective_max_seconds': 43200,
+        'lifetime': 'container-through-verifier',
+        'stdout': out, 'stderr': err,
+    }
+    target = registry / ('%s-%s.json' % (pid, fields[19]))
+    temporary = target.with_suffix('.tmp')
+    temporary.write_text(json.dumps(record) + '\n')
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, target)
+    args[2] = '43200s'
+    args[3:] = ['python3', '/opt/moi-service-lifetime/service-supervisor.py', args[-1]]
+os.execv('/usr/bin/timeout', ['/usr/bin/timeout', *args])

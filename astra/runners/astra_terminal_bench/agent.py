@@ -48,6 +48,8 @@ from astra.runners.astra_terminal_bench.trajectory_export import (
 )
 
 
+_NATIVE_PROCESS_PROBE_RUN_COMMAND = process_probe_run_command
+
 REMOTE_BINARY = "/installed-agent/astra"
 REMOTE_ROOT = "/tmp/astra-terminal-bench"
 REMOTE_PROMPT = f"{REMOTE_ROOT}/instruction.md"
@@ -705,6 +707,7 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
             STREAM_OPTIONAL_RETRY_MIN_REMAINING_SEC
         ),
         product_timeout_multiplier: float = C0_PRODUCT_TIMEOUT_MULTIPLIER,
+        service_lifetime: str = "v2",
         *args,
         **kwargs,
     ):
@@ -721,6 +724,9 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
             stream_optional_retry_min_remaining_sec
         )
         self.product_timeout_multiplier = float(product_timeout_multiplier)
+        if service_lifetime not in {"v2", "legacy"}:
+            raise ValueError("service_lifetime must be v2 or legacy")
+        self.service_lifetime = service_lifetime
         temperature_value = self._get_env("ASTRA_TBENCH_TEMPERATURE")
         self.requested_temperature = (
             float(temperature_value) if temperature_value is not None else None
@@ -739,6 +745,17 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
     @staticmethod
     def name() -> str:
         return "astra-terminal-bench-c0"
+
+    def _runtime_env(self) -> dict[str, str]:
+        env = super()._runtime_env()
+        path = getattr(self, "_service_lifetime_path", None)
+        if path:
+            env.update(
+                ASTRA_ALLOW_ENVIRONMENT_BACKGROUND_TASKS="1",
+                MOI_SERVICE_LIFETIME="container",
+                PATH=path,
+            )
+        return env
 
     def _arm_harbor_secret_scrub(self) -> None:
         """Register the token only after Harbor snapshots the run environment."""
@@ -801,6 +818,14 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
                 f"{shlex.quote(REMOTE_STREAM_TRANSPORT_RETRY)}"
             ),
         )
+        # Existing external v2 wrappers own their installation and policy.
+        if (
+            self.service_lifetime == "v2"
+            and process_probe_run_command is _NATIVE_PROCESS_PROBE_RUN_COMMAND
+        ):
+            from .service_lifetime import install as install_service_lifetime
+
+            await install_service_lifetime(self, environment)
 
     async def run(
         self,
@@ -1051,7 +1076,11 @@ class AstraTerminalBenchC0Agent(AstraTerminalBenchAgent):
             *astra_argv,
         ]
         product_command = process_probe_run_command(
-            probe_path=REMOTE_PROCESS_PROBE,
+            probe_path=(
+                "/installed-agent/moi-service-probe.py"
+                if getattr(self, "_service_lifetime_path", None)
+                else REMOTE_PROCESS_PROBE
+            ),
             identity_path=paths["identity"],
             stdout_path=paths["stdout"],
             stderr_path=paths["stderr"],

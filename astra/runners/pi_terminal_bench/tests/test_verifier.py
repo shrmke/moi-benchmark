@@ -131,6 +131,26 @@ class PiVerifierTests(unittest.IsolatedAsyncioTestCase):
             permission_command["command"],
         )
 
+    async def test_rejects_zero_reward_after_confirmed_fixture_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            Verifier, "verify",
+            new=AsyncMock(return_value=SimpleNamespace(rewards={"reward": 0.0})),
+        ):
+            verifier_dir = Path(directory)
+            (verifier_dir / "ctrf.json").write_text(json.dumps({"results": {
+                "summary": {"tests": 1},
+                "tests": [{"name": "test", "status": "failed", "trace":
+                    "def generate_test_data():\nload_dataset(\n"
+                    "ValueError: Couldn't find cache for allenai/c4"}],
+            }}), encoding="utf-8")
+            (verifier_dir / "test-stdout.txt").write_text(
+                "Captured stderr setup\nNetwork is unreachable "
+                "https://huggingface.co/datasets/allenai/c4/resolve/revision/c4.py",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(VerifierInfrastructureError, "C4 test-data fixture"):
+                await self._verifier(verifier_dir).verify()
+
     async def test_rejects_non_binary_reward(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(
             Verifier,

@@ -17,6 +17,7 @@ from .products import Product
 
 RESULT_FIELDS = (
     "task",
+    "raw_reward",
     "reward",
     "verifier_status",
     "verifier_test_count",
@@ -93,6 +94,8 @@ def verifier_status(
     if exception_type in VERIFIER_INFRA_EXCEPTION_TYPES:
         return "verifier_infra_failure", None, 0, str(exception_type)
     reward_value = ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward")
+    if exception_type == "CancelledError" and reward_value is None:
+        return "execution_incomplete", None, 0, "run cancelled before a verifier result was available"
     try:
         reward = validate_binary_reward(reward_value)
         evidence = validate_ctrf_report(result_path.parent / "verifier" / "ctrf.json")
@@ -133,6 +136,7 @@ def result_row(task: str, result: dict[str, Any], path: Path) -> dict[str, Any]:
     exception = result.get("exception_info")
     return {
         "task": task,
+        "raw_reward": ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward"),
         "reward": reward,
         "verifier_status": status,
         "verifier_test_count": test_count,
@@ -191,6 +195,12 @@ def summarize(
         "valid_verifier_tasks": len(valid_rows),
         "passed_tasks": sum(row["reward"] == 1.0 for row in valid_rows),
         "failed_tasks": sum(row["reward"] == 0.0 for row in valid_rows),
+        "verifier_infra_failure_tasks": sum(
+            row["verifier_status"] == "verifier_infra_failure" for row in rows
+        ),
+        "execution_incomplete_tasks": sum(
+            row["verifier_status"] == "execution_incomplete" for row in rows
+        ),
         "pending_tasks": len(pending),
         "mean_reward": (
             sum(float(row["reward"]) for row in valid_rows) / len(valid_rows)

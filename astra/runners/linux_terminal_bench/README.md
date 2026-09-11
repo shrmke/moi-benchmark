@@ -4,6 +4,9 @@
 Astra、Hermes、Pi、DSH adapter，不复制产品执行逻辑；队列、资源调度、
 resume、verifier 有效性和汇总由这里统一控制。
 
+离线轨迹查看与分析见 [Langfuse 部署、导入和使用说明](LANGFUSE.md)。
+该流程复用当前 runner 的得分判定，独立运行，不改变测评执行逻辑。
+
 ## 冻结口径
 
 - Host 与 Docker daemon：原生 Linux amd64。`tune-mjcf` 需要这个条件。
@@ -26,8 +29,16 @@ resume、verifier 有效性和汇总由这里统一控制。
 - Verifier 独立使用 `verifier_timeout_multiplier=2.0`，为系统依赖和大型 Python
   wheel 下载提供余量；该设置不增加产品执行预算。
 - 完成判定统一要求数值 reward 为 0/1，且 `verifier/ctrf.json` 证明至少
-  有一个测试实际完成。Verifier 基础设施失败和 DSH `finish_reason=error`
-  保持 pending，不补记 0 分。
+  有一个测试实际完成；同时排除已确认的 verifier 前置条件失败：OCaml
+  测试套件 TLS 下载失败后断言空输出、C4 测试数据 fixture 网络不可达且
+  对应缓存缺失。判定同时检查失败 trace 和因果日志，不仅凭缺文件或网络
+  警告排除结果；这些规则不代表已覆盖所有基础设施故障。
+  Verifier 基础设施失败和 DSH `finish_reason=error` 保持 pending，不补记 0 分。
+- 汇总中的 `raw_reward` 保留 Harbor result 的原值，`reward` 表示有效得分；
+  verifier 无效时后者为 null（CSV 空白）。原始 trial 文件不改写。
+  运行取消且没有 reward 时单列 `execution_incomplete`，不冒充 verifier 故障。
+  下次普通启动会重新计算 pending；已有报告和显式 `--retry-queue` 文件
+  不会因修改判定代码而自动刷新，89 题总体范围不变。
 - C0 lifecycle audit 与官方 verifier reward 分列；audit 不覆盖或改写 reward。
 
 四个产品保留各自冻结版本与原生模型迭代机制。Pi 0.73.1 使用
