@@ -79,13 +79,13 @@ python3 -m astra.runners.linux_terminal_bench.run --product astra --retry-queue 
 
 结果位于数据根目录下的 `work/linux-terminal-bench/<product>/`：
 
-| 路径 | 内容 |
-| ---- | ---- |
-| `jobs/` | Harbor 原始 trial、Agent 日志和 verifier 证据 |
-| `state/run-manifest.json` | 产品、模型、源码版本和本轮运行配置 |
-| `state/resource.queue.tsv` | 资源调度队列 |
-| `state/pending.queue.tsv` | 待运行队列 |
-| `state/analysis/summary.json`、`summary.csv` | runner 结果汇总 |
+| 路径                                             | 内容                                          |
+| ------------------------------------------------ | --------------------------------------------- |
+| `jobs/`                                        | Harbor 原始 trial、Agent 日志和 verifier 证据 |
+| `state/run-manifest.json`                      | 产品、模型、源码版本和本轮运行配置            |
+| `state/resource.queue.tsv`                     | 资源调度队列                                  |
+| `state/pending.queue.tsv`                      | 待运行队列                                    |
+| `state/analysis/summary.json`、`summary.csv` | runner 结果汇总                               |
 
 完成判定除二元 reward 外还检查 verifier 实际执行证据；已识别的基础设施故障保持 pending，不补记为 0 分。这里的 runner 汇总与人工整理的 `latest-results`、分析报告分别管理，不会自动同步更新。离线轨迹查看与导入见 [Langfuse 说明](runners/linux_terminal_bench/LANGFUSE.md)。
 
@@ -111,7 +111,7 @@ Linux 使用包含 `tune-mjcf` 的 89 题 cohort、1.0× 产品预算和单产�
 | 产品   | verifier pass | 有效 verifier | 有效 verifier 通过率 | 状态   |
 | ------ | ------------: | ------------: | -------------------: | ------ |
 | Astra  |            48 |         89/89 |               53.93% | 已完成 |
-| Hermes |            34 |         89/89 |               38.20% | 已完成 |
+| Hermes |            45 |         89/89 |               50.56% | 已完成 |
 | PI     |            52 |         89/89 |               58.43% | 已完成 |
 | DSH    |            49 |         89/89 |               55.06% | 已完成 |
 

@@ -9,14 +9,14 @@
 | --------------------------- | ------ | ------ | ------ | ------ |
 | 任务覆盖                    | 89/89  | 89/89  | 89/89  | 89/89  |
 | 有效 verifier（原报告口径） | 89/89  | 89/89  | 89/89  | 89/89  |
-| verifier pass               | 48     | 49     | 34     | 52     |
-| verifier no-pass            | 41     | 40     | 55     | 37     |
-| verifier pass rate          | 53.93% | 55.06% | 38.20% | 58.43% |
-| completed                   | 45     | 60     | 52     | 55     |
-| timeout                     | 25     | 21     | 28     | 32     |
+| verifier pass               | 48     | 49     | 45     | 52     |
+| verifier no-pass            | 41     | 40     | 44     | 37     |
+| verifier pass rate          | 53.93% | 55.06% | 50.56% | 58.43% |
+| completed                   | 45     | 60     | 57     | 55     |
+| timeout                     | 25     | 21     | 25     | 32     |
 | failed                      | 19     | 0      | 0      | 0      |
-| max_turn                    | 0      | 7      | 5      | 0      |
-| max_token                   | 0      | 1      | 4      | 2      |
+| max_turn                    | 0      | 7      | 7      | 0      |
+| max_token                   | 0      | 1      | 0      | 2      |
 
 当前选中结果的任务通过数为 **PI 52/89（58.43%）、DSH 49/89（55.06%）、Astra 48/89（53.93%）、Hermes 34/89（38.20%）**。Astra 比 PI 少 4 题（4.49 个百分点），比 DSH 少 1 题（1.12 个百分点），比 Hermes 多 14 题（15.73 个百分点）。差值描述当前结果，不构成统计显著性或框架因果优势的结论。
 
@@ -27,7 +27,7 @@ Hermes通过率远低于预期，不排除模型、环境的短期波动情况�
 | Astra 对照 | 双方通过 | 仅 Astra 通过 | 仅对方通过 | 双方未通过 |
 | ---------- | -------- | ------------- | ---------- | ---------- |
 | DSH        | 32       | 16            | 17         | 24         |
-| Hermes     | 29       | 19            | 5          | 36         |
+| Hermes     | 37       | 11            | 8          | 33         |
 | PI         | 36       | 12            | 16         | 25         |
 
 ## 统计口径与配置
@@ -70,11 +70,11 @@ Hermes通过率远低于预期，不排除模型、环境的短期波动情况�
 
 | 结束状态  | Astra       | DSH          | Hermes       | PI           |
 | --------- | ----------- | ------------ | ------------ | ------------ |
-| completed | 45 / 39 / 6 | 60 / 44 / 16 | 52 / 32 / 20 | 55 / 43 / 12 |
-| timeout   | 25 / 2 / 23 | 21 / 4 / 17  | 28 / 2 / 26  | 32 / 9 / 23  |
+| completed | 45 / 39 / 6 | 60 / 44 / 16 | 57 / 42 / 15 | 55 / 43 / 12 |
+| timeout   | 25 / 2 / 23 | 21 / 4 / 17  | 25 / 3 / 22  | 32 / 9 / 23  |
 | failed    | 19 / 7 / 12 | 0 / 0 / 0    | 0 / 0 / 0    | 0 / 0 / 0    |
-| max_turn  | 0 / 0 / 0   | 7 / 1 / 6    | 5 / 0 / 5    | 0 / 0 / 0    |
-| max_token | 0 / 0 / 0   | 1 / 0 / 1    | 4 / 0 / 4    | 2 / 0 / 2    |
+| max_turn  | 0 / 0 / 0   | 7 / 1 / 6    | 7 / 0 / 7    | 0 / 0 / 0    |
+| max_token | 0 / 0 / 0   | 1 / 0 / 1    | 0 / 0 / 0    | 2 / 0 / 2    |
 
 Astra 的 19 个 failed 中仍有 7 题通过，PI 的 32 个 timeout 中有 9 题通过；结束状态不能代替任务得分。max_turn/max_token 的 0 仅表示源记录未归入该类，不证明不存在未细分的预算耗尽。
 
@@ -83,9 +83,9 @@ Astra 的 19 个 failed 中仍有 7 题通过，PI 的 32 个 timeout 中有 9 �
 | 指标                       | Astra | DSH   | Hermes | PI    |
 | -------------------------- | ----- | ----- | ------ | ----- |
 | 有 passed/total 明细的任务 | 89/89 | 89/89 | 89/89  | 89/89 |
-| verifier 条目累计通过      | 229   | 222   | 194    | 228   |
+| verifier 条目累计通过      | 229   | 222   | 224    | 228   |
 | verifier 条目累计执行      | 308   | 308   | 308    | 308   |
-| 条目级通过比例（诊断项）   | 74.4% | 72.1% | 63.0%  | 74.0% |
+| 条目级通过比例（诊断项）   | 74.4% | 72.1% | 72.7%  | 74.0% |
 
 Astra 条目通过数为 229，略高于 PI 的 228，但完整任务通过数更少。各题条目数量与部分通过分布不同，条目级比例不能替代任务级二元 reward。
 
@@ -94,8 +94,8 @@ Astra 条目通过数为 229，略高于 PI 的 228，但完整任务通过数�
 | 难度   | Astra          | DSH            | Hermes         | PI             |
 | ------ | -------------- | -------------- | -------------- | -------------- |
 | Easy   | 3/4（75.0%）   | 4/4（100.0%）  | 2/4（50.0%）   | 3/4（75.0%）   |
-| Medium | 34/55（61.8%） | 31/55（56.4%） | 21/55（38.2%） | 35/55（63.6%） |
-| Hard   | 11/30（36.7%） | 14/30（46.7%） | 11/30（36.7%） | 14/30（46.7%） |
+| Medium | 34/55（61.8%） | 31/55（56.4%） | 29/55（52.7%） | 35/55（63.6%） |
+| Hard   | 11/30（36.7%） | 14/30（46.7%） | 14/30（46.7%） | 14/30（46.7%） |
 
 Medium 上 PI 35/55、Astra 34/55，差 1 题；Hard 上 PI 与 DSH 均为 14/30，Astra 与 Hermes 均为 11/30。Easy 只有 4 题，百分比需结合小样本量理解。
 
@@ -105,33 +105,33 @@ Medium 上 PI 35/55、Astra 34/55，差 1 题；Hard 上 PI 与 DSH 均为 14/30
 | --------------------------- | ------ | ----- | ------- | --------- | --------- |
 | 端到端时间                  | Astra  | 89/89 | 25.79 h | 14.12 min | 32.58 min |
 | 端到端时间                  | DSH    | 89/89 | 23.39 h | 14.66 min | 31.12 min |
-| 端到端时间                  | Hermes | 89/89 | 26.14 h | 16.07 min | 31.86 min |
+| 端到端时间                  | Hermes | 89/89 | 26.12 h | 16.10 min | 31.79 min |
 | 端到端时间                  | PI     | 89/89 | 28.88 h | 16.19 min | 36.40 min |
 | Agent 执行时间              | Astra  | 89/89 | 21.16 h | 11.18 min | 30.13 min |
 | Agent 执行时间              | DSH    | 89/89 | 19.02 h | 10.75 min | 27.16 min |
-| Agent 执行时间              | Hermes | 89/89 | 22.77 h | 14.29 min | 30.43 min |
+| Agent 执行时间              | Hermes | 89/89 | 22.20 h | 13.78 min | 30.32 min |
 | Agent 执行时间              | PI     | 89/89 | 24.52 h | 15.12 min | 30.38 min |
 | Verifier 时间               | Astra  | 89/89 | 3.61 h  | 0.74 min  | 6.44 min  |
 | Verifier 时间               | DSH    | 89/89 | 3.01 h  | 0.54 min  | 5.61 min  |
-| Verifier 时间               | Hermes | 89/89 | 2.61 h  | 0.60 min  | 3.87 min  |
+| Verifier 时间               | Hermes | 89/89 | 3.12 h  | 0.73 min  | 4.33 min  |
 | Verifier 时间               | PI     | 89/89 | 3.26 h  | 0.61 min  | 6.37 min  |
 | 模型响应/API calls（trace） | Astra  | 89/89 | 1,571   | 15.0      | 33.2      |
 | 模型响应/API calls（trace） | DSH    | 89/89 | 1,954   | 19.0      | 42.4      |
-| 模型响应/API calls（trace） | Hermes | 89/89 | 2,521   | 23.0      | 72.0      |
+| 模型响应/API calls（trace） | Hermes | 89/89 | 2,743   | 23.0      | 82.2      |
 | 模型响应/API calls（trace） | PI     | 89/89 | 1,968   | 17.0      | 45.2      |
 | Tool calls（trace）         | Astra  | 89/89 | 1,899   | 19.0      | 43.0      |
 | Tool calls（trace）         | DSH    | 89/89 | 2,050   | 20.0      | 48.4      |
-| Tool calls（trace）         | Hermes | 89/89 | 2,809   | 23.0      | 81.2      |
+| Tool calls（trace）         | Hermes | 89/89 | 3,008   | 24.0      | 90.0      |
 | Tool calls（trace）         | PI     | 89/89 | 2,262   | 19.0      | 54.0      |
 
 | Token 分量 / 统计口径       | Astra               | DSH                 | Hermes              | PI                  |
 | --------------------------- | ------------------- | ------------------- | ------------------- | ------------------- |
-| fresh input                 | 10,186,869（89/89） | 7,992,685（89/89）  | 5,651,935（89/89）  | 16,216,107（88/89） |
-| cache read                  | 56,577,024（89/89） | 24,351,872（89/89） | 71,739,840（89/89） | 47,470,464（88/89） |
+| fresh input                 | 10,186,869（89/89） | 7,992,685（89/89）  | 6,068,674（89/89）  | 16,216,107（88/89） |
+| cache read                  | 56,577,024（89/89） | 24,351,872（89/89） | 84,273,088（89/89） | 47,470,464（88/89） |
 | cache write（独立字段）     | 0（89/89）          | 缺失（0/89）        | 0（89/89）          | 0（88/89）          |
-| output                      | 2,625,096（89/89）  | 1,533,489（89/89）  | 1,393,760（89/89）  | 3,033,741（88/89）  |
-| reasoning（单列，不再叠加） | 缺失（0/89）        | 缺失（0/89）        | 842,813（89/89）    | 缺失（0/89）        |
-| 已观测 Token 合计           | 69,388,989（89/89） | 33,878,046（89/89） | 78,785,535（89/89） | 66,720,312（88/89） |
+| output                      | 2,625,096（89/89）  | 1,533,489（89/89）  | 1,684,507（89/89）  | 3,033,741（88/89）  |
+| reasoning（单列，不再叠加） | 缺失（0/89）        | 缺失（0/89）        | 979,353（89/89）    | 缺失（0/89）        |
+| 已观测 Token 合计           | 69,388,989（89/89） | 33,878,046（89/89） | 92,026,269（89/89） | 66,720,312（88/89） |
 
 DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累计 Agent 时间最长。Astra 模型响应与工具调用计数最少，但统计粒度不同，不能直接归因于调用效率更高。
 
@@ -150,7 +150,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 
 | Task                             | 难度   | Astra               | DSH               | Hermes             | PI                |
 | -------------------------------- | ------ | ------------------- | ----------------- | ------------------ | ----------------- |
-| adaptive-rejection-sampler       | Medium | 1；9/9；timeout     | 1；9/9；timeout   | 0；0/9；timeout    | 0；0/9；timeout   |
+| adaptive-rejection-sampler       | Medium | 1；9/9；timeout     | 1；9/9；timeout   | 1；9/9；timeout    | 0；0/9；timeout   |
 | bn-fit-modify                    | Hard   | 1；9/9；completed   | 1；9/9；completed | 1；9/9；completed  | 1；9/9；completed |
 | break-filter-js-from-html        | Medium | 1；1/1；completed   | 1；1/1；completed | 1；1/1；completed  | 1；1/1；completed |
 | build-cython-ext                 | Medium | 0；10/11；completed | 0；9/11；max_turn | 0；10/11；max_turn | 1；11/11；timeout |
@@ -163,7 +163,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | cobol-modernization              | Easy   | 1；3/3；completed   | 1；3/3；completed | 0；1/3；timeout    | 0；1/3；timeout   |
 | code-from-image                  | Medium | 0；0/2；timeout     | 1；2/2；timeout   | 1；2/2；completed  | 1；2/2；completed |
 | compile-compcert                 | Medium | 0；0/3；timeout     | 0；0/3；timeout   | 0；0/3；timeout    | 1；3/3；timeout   |
-| configure-git-webserver          | Hard   | 1；1/1；completed   | 0；0/1；completed | 0；0/1；completed  | 0；0/1；completed |
+| configure-git-webserver          | Hard   | 1；1/1；completed   | 0；0/1；completed | 1；1/1；completed  | 0；0/1；completed |
 | constraints-scheduling           | Medium | 1；3/3；completed   | 1；3/3；completed | 1；3/3；completed  | 1；3/3；completed |
 | count-dataset-tokens             | Medium | 1；1/1；completed   | 0；0/1；timeout   | 0；0/1；timeout    | 0；0/1；timeout   |
 | crack-7z-hash                    | Medium | 0；0/2；failed      | 1；2/2；completed | 1；2/2；completed  | 1；2/2；completed |
@@ -172,10 +172,10 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | distribution-search              | Medium | 1；4/4；completed   | 1；4/4；completed | 1；4/4；completed  | 1；4/4；completed |
 | dna-assembly                     | Hard   | 0；0/1；timeout     | 1；1/1；completed | 1；1/1；completed  | 0；0/1；timeout   |
 | dna-insert                       | Medium | 0；0/1；completed   | 1；1/1；completed | 0；0/1；completed  | 1；1/1；completed |
-| extract-elf                      | Medium | 0；0/2；timeout     | 0；0/2；completed | 0；0/2；timeout    | 0；0/2；timeout   |
+| extract-elf                      | Medium | 0；0/2；timeout     | 0；0/2；completed | 1；2/2；timeout    | 0；0/2；timeout   |
 | extract-moves-from-video         | Hard   | 0；0/2；failed      | 0；0/2；timeout   | 0；0/2；timeout    | 0；0/2；timeout   |
 | feal-differential-cryptanalysis  | Hard   | 1；1/1；failed      | 1；1/1；completed | 1；1/1；completed  | 1；1/1；completed |
-| feal-linear-cryptanalysis        | Hard   | 1；1/1；completed   | 1；1/1；completed | 0；0/1；max_token  | 1；1/1；completed |
+| feal-linear-cryptanalysis        | Hard   | 1；1/1；completed   | 1；1/1；completed | 1；1/1；max_token  | 1；1/1；completed |
 | filter-js-from-html              | Medium | 0；1/2；failed      | 0；1/2；completed | 0；1/2；completed  | 0；1/2；timeout   |
 | financial-document-processor     | Medium | 1；7/7；completed   | 1；7/7；completed | 1；7/7；completed  | 1；7/7；completed |
 | fix-code-vulnerability           | Hard   | 1；6/6；completed   | 1；6/6；completed | 1；6/6；completed  | 1；6/6；completed |
@@ -183,11 +183,11 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | fix-ocaml-gc                     | Hard   | 1；1/1；completed   | 0；0/1；completed | 1；1/1；timeout    | 1；1/1；timeout   |
 | gcode-to-text                    | Medium | 0；0/2；timeout     | 0；0/2；timeout   | 0；0/2；timeout    | 0；0/2；timeout   |
 | git-leak-recovery                | Medium | 1；5/5；completed   | 1；5/5；completed | 1；5/5；completed  | 1；5/5；completed |
-| git-multibranch                  | Medium | 1；1/1；failed      | 0；0/1；completed | 0；0/1；completed  | 0；0/1；completed |
+| git-multibranch                  | Medium | 1；1/1；failed      | 0；0/1；completed | 1；1/1；completed  | 0；0/1；completed |
 | gpt2-codegolf                    | Hard   | 0；0/1；timeout     | 0；0/1；timeout   | 0；0/1；timeout    | 0；0/1；timeout   |
 | headless-terminal                | Medium | 1；7/7；completed   | 1；7/7；completed | 0；6/7；completed  | 0；0/7；timeout   |
-| hf-model-inference               | Medium | 1；4/4；completed   | 0；1/4；completed | 0；2/4；completed  | 0；1/4；completed |
-| install-windows-3.11             | Hard   | 0；2/4；failed      | 0；1/4；completed | 0；1/4；completed  | 1；4/4；timeout   |
+| hf-model-inference               | Medium | 1；4/4；completed   | 0；1/4；completed | 1；4/4；completed  | 0；1/4；completed |
+| install-windows-3.11             | Hard   | 0；2/4；failed      | 0；1/4；completed | 0；3/4；completed  | 1；4/4；timeout   |
 | kv-store-grpc                    | Medium | 1；7/7；completed   | 0；5/7；completed | 0；5/7；completed  | 0；5/7；completed |
 | large-scale-text-editing         | Medium | 1；5/5；completed   | 1；5/5；completed | 1；5/5；completed  | 1；5/5；timeout   |
 | largest-eigenval                 | Medium | 1；3/3；timeout     | 0；2/3；timeout   | 0；2/3；completed  | 1；3/3；timeout   |
@@ -203,22 +203,22 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | mteb-leaderboard                 | Medium | 0；0/2；failed      | 0；0/2；max_turn  | 0；0/2；max_turn   | 1；2/2；completed |
 | mteb-retrieve                    | Medium | 0；1/2；completed   | 0；1/2；completed | 0；0/2；max_turn   | 0；1/2；completed |
 | multi-source-data-merger         | Medium | 1；3/3；completed   | 1；3/3；completed | 1；3/3；completed  | 1；3/3；completed |
-| nginx-request-logging            | Medium | 1；8/8；completed   | 0；3/8；completed | 0；3/8；completed  | 0；3/8；completed |
+| nginx-request-logging            | Medium | 1；8/8；completed   | 0；3/8；completed | 1；8/8；completed  | 0；3/8；completed |
 | openssl-selfsigned-cert          | Medium | 1；6/6；completed   | 1；6/6；completed | 0；5/6；completed  | 1；6/6；completed |
 | overfull-hbox                    | Easy   | 0；3/4；timeout     | 1；4/4；completed | 0；3/4；timeout    | 1；4/4；completed |
 | password-recovery                | Hard   | 1；2/2；completed   | 0；0/2；timeout   | 1；2/2；completed  | 1；2/2；completed |
 | path-tracing                     | Hard   | 0；0/5；timeout     | 0；0/5；timeout   | 0；0/5；timeout    | 0；0/5；timeout   |
-| path-tracing-reverse             | Hard   | 0；0/3；timeout     | 0；0/3；timeout   | 0；0/3；timeout    | 1；3/3；timeout   |
+| path-tracing-reverse             | Hard   | 0；0/3；timeout     | 0；0/3；timeout   | 1；3/3；timeout    | 1；3/3；timeout   |
 | polyglot-c-py                    | Medium | 1；1/1；completed   | 1；1/1；completed | 1；1/1；completed  | 1；1/1；completed |
 | polyglot-rust-c                  | Hard   | 1；1/1；failed      | 1；1/1；completed | 1；1/1；completed  | 1；1/1；completed |
 | portfolio-optimization           | Medium | 1；4/4；completed   | 1；4/4；completed | 0；1/4；completed  | 1；4/4；completed |
 | protein-assembly                 | Hard   | 0；0/1；timeout     | 0；0/1；timeout   | 0；0/1；timeout    | 0；0/1；timeout   |
 | prove-plus-comm                  | Easy   | 1；4/4；completed   | 1；4/4；completed | 1；4/4；completed  | 1；4/4；completed |
-| pypi-server                      | Medium | 1；1/1；completed   | 0；0/1；completed | 0；0/1；completed  | 0；0/1；completed |
+| pypi-server                      | Medium | 1；1/1；completed   | 0；0/1；completed | 1；1/1；completed  | 0；0/1；completed |
 | pytorch-model-cli                | Medium | 1；6/6；completed   | 0；5/6；completed | 1；6/6；completed  | 0；5/6；completed |
 | pytorch-model-recovery           | Medium | 1；5/5；completed   | 1；5/5；completed | 1；5/5；completed  | 1；5/5；completed |
 | qemu-alpine-ssh                  | Medium | 0；0/1；failed      | 0；0/1；timeout   | 0；0/1；timeout    | 0；0/1；timeout   |
-| qemu-startup                     | Medium | 1；1/1；completed   | 0；0/1；completed | 0；0/1；completed  | 1；1/1；timeout   |
+| qemu-startup                     | Medium | 1；1/1；completed   | 0；0/1；completed | 1；1/1；completed  | 1；1/1；timeout   |
 | query-optimize                   | Medium | 0；5/6；failed      | 1；6/6；completed | 0；5/6；completed  | 0；5/6；completed |
 | raman-fitting                    | Medium | 0；1/3；timeout     | 0；0/3；timeout   | 0；1/3；timeout    | 1；3/3；completed |
 | regex-chess                      | Hard   | 0；0/4；failed      | 0；0/4；max_token | 0；0/4；max_token  | 0；0/4；max_token |
@@ -227,7 +227,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | rstan-to-pystan                  | Medium | 0；1/6；failed      | 1；6/6；completed | 1；6/6；completed  | 1；6/6；completed |
 | sam-cell-seg                     | Hard   | 1；9/9；completed   | 0；1/9；max_turn  | 1；9/9；completed  | 1；9/9；completed |
 | sanitize-git-repo                | Medium | 1；3/3；completed   | 0；2/3；completed | 1；3/3；completed  | 1；3/3；completed |
-| schemelike-metacircular-eval     | Medium | 0；0/1；timeout     | 1；1/1；timeout   | 0；0/1；timeout    | 0；0/1；timeout   |
+| schemelike-metacircular-eval     | Medium | 0；0/1；timeout     | 1；1/1；timeout   | 1；1/1；timeout    | 0；0/1；timeout   |
 | sparql-university                | Hard   | 1；3/3；completed   | 1；3/3；completed | 1；3/3；completed  | 1；3/3；completed |
 | sqlite-db-truncate               | Medium | 1；1/1；failed      | 1；1/1；completed | 1；1/1；completed  | 1；1/1；completed |
 | sqlite-with-gcov                 | Medium | 1；3/3；completed   | 0；0/3；timeout   | 0；2/3；completed  | 1；3/3；completed |
@@ -237,7 +237,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | tune-mjcf                        | Medium | 0；3/4；timeout     | 1；4/4；timeout   | 0；3/4；timeout    | 0；3/4；timeout   |
 | video-processing                 | Hard   | 0；3/5；completed   | 1；5/5；completed | 0；3/5；completed  | 0；4/5；completed |
 | vulnerable-secret                | Medium | 1；3/3；completed   | 1；3/3；completed | 1；3/3；completed  | 1；3/3；completed |
-| winning-avg-corewars             | Medium | 0；2/3；timeout     | 1；3/3；completed | 0；1/3；completed  | 1；3/3；completed |
+| winning-avg-corewars             | Medium | 0；2/3；timeout     | 1；3/3；completed | 0；2/3；completed  | 1；3/3；completed |
 | write-compressor                 | Hard   | 0；0/3；timeout     | 1；3/3；completed | 0；0/3；timeout    | 0；2/3；timeout   |
 
 **逐题时间、模型响应、Tool 与 Token（356 条记录）**
@@ -248,7 +248,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | -------------------------------- | ------ | -------- | ---------- | --------- | ------------ | ---------- | ----------- | ---------- | ------- | ---------- |
 | adaptive-rejection-sampler       | Astra  | 14       | 14         | 15.12     | 0.67         | 17.25      | 153,028     | 439,808    | 39,001  | 631,837    |
 | adaptive-rejection-sampler       | DSH    | 6        | 6          | 15.12     | 0.59         | 16.72      | 88,231      | 117,248    | 42,146  | 247,625    |
-| adaptive-rejection-sampler       | Hermes | 3        | 4          | 15.14     | 0.62         | 16.24      | 1,858       | 42,752     | 40,355  | 84,965     |
+| adaptive-rejection-sampler       | Hermes | 25        | 24          | 13.78     | 1.98         | 16.36      | 82,283       | 695,040     | 41,738  | 819,061     |
 | adaptive-rejection-sampler       | PI     | 0        | 0          | 15.12     | 0.58         | 16.80      | 缺失        | 缺失       | 缺失    | 缺失       |
 | bn-fit-modify                    | Astra  | 23       | 22         | 6.04      | 1.07         | 7.54       | 57,265      | 897,152    | 8,284   | 962,701    |
 | bn-fit-modify                    | DSH    | 17       | 16         | 14.15     | 7.48         | 22.72      | 26,918      | 57,024     | 5,984   | 89,926     |
@@ -284,11 +284,11 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | chess-best-move                  | PI     | 11       | 12         | 15.13     | 0.49         | 16.18      | 47,820      | 40,320     | 17,284  | 105,424    |
 | circuit-fibsqrt                  | Astra  | 8        | 6          | 60.10     | 0.63         | 61.16      | 66,719      | 244,672    | 236,373 | 547,764    |
 | circuit-fibsqrt                  | DSH    | 9        | 10         | 18.56     | 1.66         | 21.21      | 223,302     | 282,368    | 69,017  | 574,687    |
-| circuit-fibsqrt                  | Hermes | 1        | 2          | 30.61     | 0.74         | 31.81      | 335         | 14,080     | 170     | 14,585     |
+| circuit-fibsqrt                  | Hermes | 1        | 2          | 27.61     | 1.66         | 29.76      | 309         | 14,080     | 55     | 14,444     |
 | circuit-fibsqrt                  | PI     | 3        | 2          | 19.31     | 0.33         | 20.21      | 8,677       | 2,560      | 67,027  | 78,264     |
 | cobol-modernization              | Astra  | 24       | 24         | 14.97     | 0.38         | 15.81      | 146,423     | 894,464    | 44,810  | 1,085,697  |
 | cobol-modernization              | DSH    | 21       | 21         | 7.26      | 0.35         | 8.39       | 71,357      | 181,824    | 18,334  | 271,515    |
-| cobol-modernization              | Hermes | 9        | 14         | 15.13     | 0.40         | 15.99      | 11,593      | 149,824    | 17,953  | 179,370    |
+| cobol-modernization              | Hermes | 13        | 21         | 15.19     | 4.26         | 19.98      | 33,009      | 199,040    | 5,758  | 237,807    |
 | cobol-modernization              | PI     | 14       | 16         | 15.13     | 0.47         | 16.17      | 141,483     | 113,280    | 49,037  | 303,800    |
 | code-from-image                  | Astra  | 34       | 37         | 20.13     | 0.74         | 21.27      | 90,823      | 1,358,016  | 21,021  | 1,469,860  |
 | code-from-image                  | DSH    | 40       | 40         | 20.11     | 0.27         | 20.97      | 211,875     | 940,800    | 27,644  | 1,180,319  |
@@ -300,7 +300,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | compile-compcert                 | PI     | 53       | 59         | 40.09     | 0.33         | 41.51      | 306,538     | 1,128,768  | 40,418  | 1,475,724  |
 | configure-git-webserver          | Astra  | 20       | 19         | 3.97      | 1.61         | 6.61       | 38,024      | 649,024    | 4,333   | 691,381    |
 | configure-git-webserver          | DSH    | 16       | 15         | 2.26      | 0.32         | 3.72       | 12,398      | 59,456     | 1,282   | 73,136     |
-| configure-git-webserver          | Hermes | 13       | 12         | 1.88      | 0.35         | 2.70       | 3,432       | 191,232    | 1,048   | 195,712    |
+| configure-git-webserver          | Hermes | 14       | 13         | 2.06      | 2.10         | 4.74       | 18,322       | 193,280    | 1,018   | 212,620    |
 | configure-git-webserver          | PI     | 15       | 17         | 10.62     | 0.41         | 11.96      | 73,902      | 121,984    | 21,289  | 217,175    |
 | constraints-scheduling           | Astra  | 7        | 7          | 2.37      | 0.58         | 3.38       | 25,464      | 222,720    | 5,684   | 253,868    |
 | constraints-scheduling           | DSH    | 6        | 7          | 2.39      | 0.58         | 3.60       | 9,319       | 25,728     | 5,427   | 40,474     |
@@ -336,7 +336,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | dna-insert                       | PI     | 12       | 14         | 14.37     | 0.44         | 16.76      | 133,787     | 223,360    | 39,995  | 397,142    |
 | extract-elf                      | Astra  | 7        | 10         | 15.11     | 0.52         | 16.11      | 63,286      | 214,528    | 46,311  | 324,125    |
 | extract-elf                      | DSH    | 10       | 14         | 4.35      | 0.51         | 6.18       | 25,264      | 97,920     | 11,301  | 134,485    |
-| extract-elf                      | Hermes | 11       | 17         | 15.16     | 0.60         | 16.40      | 118,615     | 279,936    | 27,423  | 425,974    |
+| extract-elf                      | Hermes | 11       | 14         | 8.55     | 4.07         | 13.29      | 58,992     | 301,120    | 32,827  | 392,939    |
 | extract-elf                      | PI     | 12       | 23         | 15.14     | 0.70         | 16.51      | 127,016     | 70,336     | 48,477  | 245,829    |
 | extract-moves-from-video         | Astra  | 35       | 37         | 27.08     | 0.70         | 29.05      | 161,522     | 1,210,688  | 28,208  | 1,400,418  |
 | extract-moves-from-video         | DSH    | 24       | 27         | 30.11     | 0.40         | 31.65      | 59,940      | 124,032    | 7,783   | 191,755    |
@@ -348,7 +348,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | feal-differential-cryptanalysis  | PI     | 15       | 14         | 8.36      | 11.60        | 20.49      | 130,590     | 121,600    | 24,306  | 276,496    |
 | feal-linear-cryptanalysis        | Astra  | 6        | 8          | 13.23     | 0.38         | 14.08      | 136,388     | 141,952    | 31,611  | 309,951    |
 | feal-linear-cryptanalysis        | DSH    | 18       | 19         | 18.72     | 0.31         | 19.81      | 210,642     | 356,800    | 41,362  | 608,804    |
-| feal-linear-cryptanalysis        | Hermes | 1        | 4          | 29.42     | 0.39         | 30.29      | 161         | 14,144     | 68      | 14,373     |
+| feal-linear-cryptanalysis        | Hermes | 18        | 20          | 19.90     | 1.65         | 22.15      | 173,428         | 994,432     | 85,759      | 1,253,619     |
 | feal-linear-cryptanalysis        | PI     | 19       | 21         | 18.77     | 2.07         | 21.36      | 258,002     | 599,168    | 55,155  | 912,325    |
 | filter-js-from-html              | Astra  | 9        | 8          | 7.27      | 8.29         | 16.22      | 91,787      | 217,152    | 20,107  | 329,046    |
 | filter-js-from-html              | DSH    | 48       | 48         | 12.09     | 6.94         | 19.49      | 169,866     | 748,928    | 29,640  | 948,434    |
@@ -380,11 +380,11 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | git-leak-recovery                | PI     | 12       | 18         | 3.35      | 0.42         | 4.71       | 52,336      | 40,064     | 10,554  | 102,954    |
 | git-multibranch                  | Astra  | 25       | 32         | 8.14      | 3.34         | 12.08      | 93,783      | 855,232    | 18,396  | 967,411    |
 | git-multibranch                  | DSH    | 22       | 21         | 8.92      | 0.58         | 10.48      | 28,823      | 51,648     | 3,734   | 84,205     |
-| git-multibranch                  | Hermes | 32       | 31         | 5.21      | 0.69         | 6.42       | 24,679      | 548,928    | 3,890   | 577,497    |
+| git-multibranch                  | Hermes | 33       | 32         | 4.95      | 3.87         | 9.66       | 20,009      | 584,704    | 4,640   | 609,353    |
 | git-multibranch                  | PI     | 21       | 24         | 8.03      | 0.87         | 9.47       | 131,855     | 201,792    | 24,790  | 358,437    |
 | gpt2-codegolf                    | Astra  | 6        | 6          | 15.13     | 0.41         | 16.44      | 117,154     | 106,112    | 47,663  | 270,929    |
 | gpt2-codegolf                    | DSH    | 17       | 20         | 15.11     | 0.42         | 16.44      | 122,244     | 202,624    | 39,137  | 364,005    |
-| gpt2-codegolf                    | Hermes | 0        | 0          | 15.13     | 0.45         | 16.04      | 0           | 0          | 0       | 0          |
+| gpt2-codegolf                    | Hermes | 20        | 25          | 15.31     | 1.35         | 17.31      | 45,594           | 432,192          | 23,912       | 501,698          |
 | gpt2-codegolf                    | PI     | 9        | 10         | 15.12     | 0.35         | 16.38      | 74,450      | 82,624     | 34,687  | 191,761    |
 | headless-terminal                | Astra  | 34       | 34         | 12.05     | 0.52         | 13.05      | 116,136     | 1,336,320  | 27,053  | 1,479,509  |
 | headless-terminal                | DSH    | 12       | 11         | 3.58      | 0.88         | 5.07       | 17,054      | 22,720     | 4,333   | 44,107     |
@@ -392,11 +392,11 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | headless-terminal                | PI     | 3        | 5          | 15.14     | 1.07         | 16.77      | 2,166       | 2,816      | 388     | 5,370      |
 | hf-model-inference               | Astra  | 15       | 16         | 7.64      | 0.74         | 8.91       | 52,929      | 516,160    | 5,117   | 574,206    |
 | hf-model-inference               | DSH    | 14       | 13         | 6.06      | 0.37         | 7.64       | 33,486      | 80,384     | 3,580   | 117,450    |
-| hf-model-inference               | Hermes | 16       | 18         | 6.98      | 0.38         | 7.89       | 19,481      | 305,536    | 2,791   | 327,808    |
+| hf-model-inference               | Hermes | 13       | 14         | 7.18      | 0.39         | 8.09       | 19,085      | 245,888    | 2,354   | 267,327    |
 | hf-model-inference               | PI     | 12       | 14         | 6.41      | 0.36         | 7.32       | 38,588      | 72,896     | 7,421   | 118,905    |
 | install-windows-3.11             | Astra  | 25       | 33         | 19.68     | 18.43        | 38.65      | 102,935     | 860,864    | 11,377  | 975,176    |
 | install-windows-3.11             | DSH    | 40       | 41         | 14.01     | 1.03         | 15.44      | 58,786      | 286,080    | 11,742  | 356,608    |
-| install-windows-3.11             | Hermes | 64       | 69         | 22.14     | 1.51         | 24.13      | 66,649      | 1,444,800  | 9,373   | 1,520,822  |
+| install-windows-3.11             | Hermes | 44       | 43         | 9.17     | 3.03         | 12.69      | 36,066      | 904,320  | 6,088   | 946,474  |
 | install-windows-3.11             | PI     | 96       | 104        | 60.12     | 1.16         | 61.82      | 697,104     | 5,073,216  | 99,571  | 5,869,891  |
 | kv-store-grpc                    | Astra  | 11       | 9          | 2.23      | 0.28         | 3.00       | 59,135      | 324,224    | 1,971   | 385,330    |
 | kv-store-grpc                    | DSH    | 10       | 10         | 1.49      | 0.32         | 2.39       | 7,669       | 14,336     | 1,694   | 23,699     |
@@ -428,7 +428,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | make-doom-for-mips               | PI     | 40       | 58         | 15.13     | 1.28         | 16.97      | 493,372     | 1,310,784  | 36,622  | 1,840,778  |
 | make-mips-interpreter            | Astra  | 20       | 45         | 30.13     | 1.14         | 31.77      | 275,671     | 765,504    | 102,495 | 1,143,670  |
 | make-mips-interpreter            | DSH    | 50       | 50         | 7.40      | 1.24         | 10.06      | 144,117     | 972,416    | 7,441   | 1,123,974  |
-| make-mips-interpreter            | Hermes | 36       | 52         | 30.19     | 1.25         | 32.08      | 147,321     | 1,409,344  | 26,153  | 1,582,818  |
+| make-mips-interpreter            | Hermes | 68       | 110         | 30.15     | 2.08         | 32.85      | 229,274     | 3,884,736  | 48,746  | 4,162,756  |
 | make-mips-interpreter            | PI     | 42       | 50         | 30.12     | 2.52         | 33.16      | 513,634     | 1,643,584  | 75,966  | 2,233,184  |
 | mcmc-sampling-stan               | Astra  | 18       | 21         | 30.16     | 0.42         | 31.18      | 199,715     | 524,096    | 13,844  | 737,655    |
 | mcmc-sampling-stan               | DSH    | 23       | 25         | 26.42     | 4.18         | 31.04      | 51,324      | 94,272     | 6,822   | 152,418    |
@@ -460,7 +460,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | multi-source-data-merger         | PI     | 7        | 9          | 5.31      | 0.67         | 6.56       | 41,448      | 27,648     | 18,389  | 87,485     |
 | nginx-request-logging            | Astra  | 22       | 26         | 6.04      | 1.84         | 8.39       | 91,127      | 777,792    | 11,601  | 880,520    |
 | nginx-request-logging            | DSH    | 8        | 9          | 1.32      | 0.46         | 2.36       | 6,099       | 12,864     | 1,329   | 20,292     |
-| nginx-request-logging            | Hermes | 16       | 19         | 2.51      | 0.47         | 3.44       | 13,643      | 271,168    | 3,003   | 287,814    |
+| nginx-request-logging            | Hermes | 11       | 16         | 2.02      | 3.49         | 6.19       | 8,982      | 172,160    | 1,854   | 182,996    |
 | nginx-request-logging            | PI     | 12       | 14         | 2.02      | 0.61         | 3.19       | 17,996      | 35,456     | 4,705   | 58,157     |
 | openssl-selfsigned-cert          | Astra  | 12       | 11         | 2.69      | 0.38         | 3.55       | 35,908      | 427,008    | 5,815   | 468,731    |
 | openssl-selfsigned-cert          | DSH    | 9        | 8          | 1.22      | 0.57         | 2.36       | 8,967       | 8,064      | 1,486   | 18,517     |
@@ -480,7 +480,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | path-tracing                     | PI     | 53       | 53         | 30.14     | 0.71         | 31.37      | 834,142     | 2,438,080  | 75,118  | 3,347,340  |
 | path-tracing-reverse             | Astra  | 22       | 32         | 30.13     | 1.41         | 32.44      | 146,604     | 1,013,440  | 15,146  | 1,175,190  |
 | path-tracing-reverse             | DSH    | 35       | 35         | 30.12     | 0.41         | 31.74      | 529,992     | 623,744    | 40,325  | 1,194,061  |
-| path-tracing-reverse             | Hermes | 33       | 42         | 30.17     | 0.54         | 31.17      | 335,344     | 1,827,904  | 25,152  | 2,188,400  |
+| path-tracing-reverse             | Hermes | 53       | 64         | 28.70     | 1.30         | 30.48      | 324,141     | 5,492,800  | 90,363  | 5,907,304  |
 | path-tracing-reverse             | PI     | 22       | 27         | 30.13     | 1.96         | 33.21      | 664,998     | 657,280    | 104,446 | 1,426,724  |
 | polyglot-c-py                    | Astra  | 9        | 7          | 4.68      | 0.38         | 6.00       | 22,614      | 285,568    | 12,933  | 321,115    |
 | polyglot-c-py                    | DSH    | 8        | 7          | 5.42      | 0.42         | 6.81       | 43,279      | 51,328     | 17,418  | 112,025    |
@@ -504,7 +504,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | prove-plus-comm                  | PI     | 9        | 8          | 1.41      | 0.60         | 2.50       | 10,449      | 17,792     | 2,652   | 30,893     |
 | pypi-server                      | Astra  | 11       | 13         | 2.24      | 1.35         | 4.10       | 128,516     | 254,208    | 1,995   | 384,719    |
 | pypi-server                      | DSH    | 15       | 14         | 1.67      | 0.54         | 2.64       | 10,287      | 25,408     | 1,740   | 37,435     |
-| pypi-server                      | Hermes | 38       | 37         | 4.64      | 1.08         | 6.37       | 31,796      | 690,304    | 4,330   | 726,430    |
+| pypi-server                      | Hermes | 22       | 21         | 3.38      | 2.09         | 6.04       | 13,783      | 369,216    | 2,412   | 385,411    |
 | pypi-server                      | PI     | 14       | 16         | 1.65      | 0.63         | 2.85       | 15,555      | 33,856     | 2,462   | 51,873     |
 | pytorch-model-cli                | Astra  | 21       | 21         | 7.13      | 2.93         | 10.60      | 44,481      | 795,712    | 9,054   | 849,247    |
 | pytorch-model-cli                | DSH    | 36       | 35         | 10.67     | 2.56         | 13.69      | 122,166     | 484,928    | 24,704  | 631,798    |
@@ -520,7 +520,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | qemu-alpine-ssh                  | PI     | 14       | 17         | 15.13     | 0.54         | 16.19      | 26,673      | 134,528    | 25,338  | 186,539    |
 | qemu-startup                     | Astra  | 10       | 10         | 7.86      | 1.14         | 9.49       | 49,640      | 318,976    | 15,169  | 383,785    |
 | qemu-startup                     | DSH    | 13       | 12         | 7.07      | 0.38         | 8.06       | 14,987      | 17,280     | 2,512   | 34,779     |
-| qemu-startup                     | Hermes | 29       | 28         | 6.20      | 0.35         | 7.01       | 13,010      | 471,104    | 5,380   | 489,494    |
+| qemu-startup                     | Hermes | 8       | 7         | 2.83      | 1.34         | 4.85       | 2,632      | 115,584    | 1,679   | 119,895    |
 | qemu-startup                     | PI     | 28       | 28         | 15.12     | 0.40         | 16.04      | 111,691     | 273,472    | 25,309  | 410,472    |
 | query-optimize                   | Astra  | 14       | 16         | 9.51      | 14.92        | 25.30      | 109,712     | 403,584    | 7,924   | 521,220    |
 | query-optimize                   | DSH    | 12       | 11         | 6.72      | 14.37        | 22.10      | 19,411      | 19,968     | 2,410   | 41,789     |
@@ -532,7 +532,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | raman-fitting                    | PI     | 21       | 20         | 10.33     | 0.39         | 11.29      | 231,407     | 268,352    | 32,522  | 532,281    |
 | regex-chess                      | Astra  | 2        | 2          | 38.56     | 1.88         | 40.97      | 43,828      | 69,504     | 131,498 | 244,830    |
 | regex-chess                      | DSH    | 2        | 2          | 17.16     | 2.79         | 20.61      | 2,790       | 1,408      | 65,661  | 69,859     |
-| regex-chess                      | Hermes | 8        | 8          | 42.01     | 0.50         | 42.97      | 39,134      | 93,184     | 537     | 132,855    |
+| regex-chess                      | Hermes | 1        | 2          | 37.70     | 1.37         | 39.55      | 599      | 14,080     | 134     | 14,813    |
 | regex-chess                      | PI     | 11       | 10         | 25.66     | 0.41         | 26.65      | 65,214      | 179,200    | 96,001  | 340,415    |
 | regex-log                        | Astra  | 9        | 9          | 6.45      | 0.50         | 9.40       | 109,259     | 249,984    | 19,181  | 378,424    |
 | regex-log                        | DSH    | 7        | 6          | 9.61      | 0.48         | 11.03      | 87,739      | 154,944    | 39,078  | 281,761    |
@@ -540,7 +540,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | regex-log                        | PI     | 9        | 8          | 10.19     | 0.49         | 11.69      | 117,029     | 177,920    | 39,499  | 334,448    |
 | reshard-c4-data                  | Astra  | 21       | 19         | 11.30     | 4.19         | 16.09      | 90,538      | 842,624    | 23,812  | 956,974    |
 | reshard-c4-data                  | DSH    | 24       | 23         | 6.86      | 18.59        | 28.89      | 104,457     | 323,776    | 17,243  | 445,476    |
-| reshard-c4-data                  | Hermes | 6        | 8          | 43.88     | 2.15         | 46.53      | 4,218       | 93,696     | 64,740  | 162,654    |
+| reshard-c4-data                  | Hermes | 90        | 96          | 25.29     | 2.71         | 28.57      | 36,297       | 1,882,304     | 67,197  | 1,985,798    |
 | reshard-c4-data                  | PI     | 20       | 19         | 16.85     | 7.51         | 24.98      | 155,767     | 650,368    | 52,329  | 858,464    |
 | rstan-to-pystan                  | Astra  | 15       | 21         | 13.23     | 1.01         | 14.75      | 60,823      | 569,088    | 6,420   | 636,331    |
 | rstan-to-pystan                  | DSH    | 27       | 31         | 17.01     | 0.42         | 17.88      | 92,758      | 276,096    | 9,059   | 377,913    |
@@ -556,7 +556,7 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | sanitize-git-repo                | PI     | 22       | 34         | 9.78      | 0.42         | 10.74      | 305,162     | 464,128    | 29,535  | 798,825    |
 | schemelike-metacircular-eval     | Astra  | 14       | 27         | 40.13     | 0.56         | 42.49      | 64,946      | 536,640    | 116,031 | 717,617    |
 | schemelike-metacircular-eval     | DSH    | 31       | 37         | 40.12     | 3.50         | 44.26      | 508,173     | 876,224    | 59,889  | 1,444,286  |
-| schemelike-metacircular-eval     | Hermes | 9        | 36         | 40.15     | 0.57         | 41.18      | 50,825      | 193,472    | 729     | 245,026    |
+| schemelike-metacircular-eval     | Hermes | 42        | 45         | 40.33     | 3.15         | 43.96      | 144,501      | 2,071,232    | 98,782     | 2,314,515    |
 | schemelike-metacircular-eval     | PI     | 27       | 27         | 40.14     | 0.76         | 41.43      | 889,845     | 1,701,184  | 111,625 | 2,702,654  |
 | sparql-university                | Astra  | 15       | 13         | 6.16      | 0.46         | 7.53       | 99,392      | 484,480    | 15,351  | 599,223    |
 | sparql-university                | DSH    | 20       | 19         | 4.87      | 0.40         | 6.24       | 36,166      | 203,648    | 12,115  | 251,929    |
@@ -596,11 +596,11 @@ DSH 的累计 Agent 时间与已观测 Token 最少；PI 通过数最高且累�
 | vulnerable-secret                | PI     | 17       | 16         | 2.53      | 0.37         | 3.47       | 39,864      | 65,088     | 7,760   | 112,712    |
 | winning-avg-corewars             | Astra  | 35       | 39         | 60.13     | 0.73         | 61.29      | 299,417     | 1,285,568  | 210,760 | 1,795,745  |
 | winning-avg-corewars             | DSH    | 28       | 32         | 12.93     | 0.37         | 14.52      | 218,920     | 208,128    | 21,356  | 448,404    |
-| winning-avg-corewars             | Hermes | 28       | 61         | 12.79     | 0.48         | 13.89      | 33,331      | 574,080    | 8,011   | 615,422    |
+| winning-avg-corewars             | Hermes | 88       | 92         | 41.13     | 1.87         | 43.92      | 84,922      | 2,582,464    | 16,537   | 2,683,923    |
 | winning-avg-corewars             | PI     | 25       | 29         | 21.15     | 1.83         | 23.57      | 236,688     | 698,752    | 52,585  | 988,025    |
 | write-compressor                 | Astra  | 2        | 3          | 15.10     | 0.40         | 16.40      | 5,708       | 67,328     | 55,754  | 128,790    |
 | write-compressor                 | DSH    | 8        | 8          | 10.79     | 0.43         | 12.05      | 117,333     | 102,912    | 37,938  | 258,183    |
-| write-compressor                 | Hermes | 1        | 2          | 15.16     | 0.65         | 16.27      | 166         | 14,080     | 47      | 14,293     |
+| write-compressor                 | Hermes | 1        | 2          | 15.12     | 1.41         | 17.12      | 102         | 14,144     | 47      | 14,293     |
 | write-compressor                 | PI     | 7        | 8          | 15.12     | 0.41         | 16.53      | 105,929     | 139,648    | 51,615  | 297,192    |
 
 **四者均未通过的任务**
