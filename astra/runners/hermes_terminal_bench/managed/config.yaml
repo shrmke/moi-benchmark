@@ -17,6 +17,10 @@ terminal:
   backend: local
   cwd: /app
   timeout: 180
+  # Keep guard metadata when execute_code scrubs its child environment.
+  env_passthrough:
+    - HERMES_C0_POLICY_GUARD_SHA256
+    - HERMES_C0_POLICY_GUARD_EVIDENCE
 delegation:
   max_iterations: 50
 approvals:

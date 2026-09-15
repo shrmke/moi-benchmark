@@ -132,3 +132,12 @@ try:
         stream.write("\n")
 except OSError as exc:
     _fail_closed(f"could not persist evidence: {exc}")
+
+# Adapter-only hook; no changes to installed Hermes or the pinned policy.
+_service_adapter = Path("/opt/moi-service-lifetime/hermes-service-lifetime.py")
+if _service_adapter.is_file():
+    import runpy
+    try:
+        runpy.run_path(str(_service_adapter))["install_hook"]()
+    except Exception as exc:
+        _fail_closed(f"could not install service lifecycle adapter: {exc}")

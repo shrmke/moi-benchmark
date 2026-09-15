@@ -16,19 +16,19 @@
 
 ## Terminal-Bench 2.1 轨迹数据
 
-当前清洗数据包含 Astra、DSH、Hermes 和 PI 在 Terminal-Bench 2.1 上的 433 条有效 trial，共 22,951 条标准化消息和 11,595 次工具调用。消息统一为 `user`、`assistant`、`tool` 结构；数据仅发布 `complete` 和 `partial` 两个 split，另有 95 条只有运行元数据或缺少有效用户/助手对话的记录未发布。
+当前清洗数据包含 Astra、DSH、Hermes 和 PI 在 Terminal-Bench 2.1 上的 461 条有效 trial，共 24,817 条标准化消息和 12,553 次工具调用。消息统一为 `user`、`assistant`、`tool` 结构；数据仅发布 `complete` 和 `partial` 两个 split，另有 95 条只有运行元数据或缺少有效用户/助手对话的记录未发布。
 
 | 产品   | complete | partial | 合计 |
 | ------ | -------: | ------: | ---: |
 | Astra  |      106 |      27 |  133 |
 | DSH    |       68 |      27 |   95 |
-| Hermes |       98 |      10 |  108 |
+| Hermes |      126 |      10 |  136 |
 | PI     |       57 |      40 |   97 |
-| 合计   |      329 |     104 |  433 |
+| 合计   |      357 |     104 |  461 |
 
 `complete` 表示清洗器已有充分的轨迹采集完整性证据，不表示任务通过，reward 为 `0` 的轨迹也可以属于 `complete`。Astra 补充轨迹按 `run_id` 将数据库 transcript 与终止事件中的工具调用计数逐段核对；所有 run 均有可比较计数且完全一致时进入 `complete`。Astra 的 verifier 有效性独立记录，不降级已证明完整的轨迹；其余 27 条因计数不一致、事件覆盖不足或 native 回退无法交叉核对而保留为 `partial`。DSH、Hermes 和 PI 仍按轨迹保存、终止事件、工具配对和 verifier 有效性共同判定。
 
-清洗过程省略隐藏 reasoning/thinking 内容，移除图片 base64，并对常见私钥、访问令牌及本机绝对路径进行脱敏。详细 schema、分类规则、逐项统计和复现命令见[轨迹数据说明](datasets/linux-terminal-bench-trajectory/README.md)及[质量报告](datasets/linux-terminal-bench-trajectory/quality_report.json)。
+清洗过程省略隐藏 reasoning/thinking 内容，移除图片 base64，并对常见私钥、访问令牌及本机绝对路径进行脱敏。详细 schema、分类规则、逐项统计和复现命令见[轨迹数据说明](datasets/linux-terminal-bench-trajectory/README.md)及[质量报告](datasets/linux-terminal-bench-trajectory/quality_report.json)。用于本地 Langfuse 的 461 条轨迹、780 条评分导入包见[import-cleaned](datasets/linux-terminal-bench-trajectory/langfuse/import-cleaned)。
 
 ## Linux Terminal-Bench 2.1 复现
 
@@ -121,14 +121,14 @@ Mac 与 Linux 的 Astra 使用不同 commit，当前结果不应解释为同版�
 
 ### Toolathlon：108 题结果
 
-现有 Astra 结果使用 commit `844473c68649d8ea43e10b616dc4fbf98e2321e8`。最新 Astra commit `969550b611ceba11653c4b2651079bcb85d1c24e` 尚未运行 Toolathlon，因此表中的 Astra 分数不代表最新版本。
+Astra 使用 commit `969550b611ceba11653c4b2651079bcb85d1c24e`，选定结果汇总为 **80 pass、28 no_pass，通过率 74.07%**。该口径包含四题跨版本历史替代（3 pass、1 no_pass）。
 
-| 产品   | pass | 明确 evaluator | 按 108 题通过率 | 已测评题通过率 |
-| ------ | ---: | -------------: | --------------: | -------------: |
-| Astra  |   61 |        108/108 |          56.48% |         56.48% |
-| Hermes |   72 |        108/108 |          66.67% |         66.67% |
-| PI     |   77 |        104/108 |          71.30% |         74.04% |
-| DSH    |   79 |        108/108 |          73.15% |         73.15% |
+| 产品   | pass | 明确结果 | 按 108 题通过率 | 已测评题通过率 |
+| ------ | ---: | -------: | --------------: | -------------: |
+| Astra  |   80 |  108/108 |          74.07% |         74.07% |
+| Hermes |   72 |  108/108 |          66.67% |         66.67% |
+| PI     |   77 |  104/108 |          71.30% |         74.04% |
+| DSH    |   79 |  108/108 |          73.15% |         73.15% |
 
 详细结果：
 
@@ -138,4 +138,5 @@ Mac 与 Linux 的 Astra 使用不同 commit，当前结果不应解释为同版�
 - [Terminal-Bench 2.1 Linux DSH 报告](reports/TerminalBench2.1-analysis-linux/dsh-terminalbench-linux-latest-89-task-report.md)
 - [Terminal-Bench 2.1 Linux Hermes 报告](reports/TerminalBench2.1-analysis-linux/hermes-terminalbench-linux-latest-89-task-report.md)
 - [Terminal-Bench 2.1 Linux PI 报告](reports/TerminalBench2.1-analysis-linux/pi-terminalbench-linux-latest-89-task-report.md)
-- [Toolathlon 四产品对比](reports/Toolathlon-analysis/astra-hermes-pi-dsh-toolathlon-108-task-comparison.md)
+- [Toolathlon 四产品对比](reports/Toolathlon-analysis/ALL-astra_new-hermes-pi-dsh-toolathlon-comparison.md)
+- [Toolathlon Astra 报告及 108 题明细附录](reports/Toolathlon-analysis/astra-969550b-toolathlon-108-task-analysis.md)

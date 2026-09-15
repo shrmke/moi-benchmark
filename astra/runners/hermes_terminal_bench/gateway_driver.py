@@ -160,6 +160,34 @@ def gateway_environment(
     return env
 
 
+def prepare_guard_passthrough(config_path: Path) -> None:
+    """Expose non-secret guard metadata to execute_code's raw config reader."""
+    import yaml
+
+    config = (
+        yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        if config_path.exists()
+        else {}
+    )
+    terminal = config.setdefault("terminal", {})
+    passthrough = terminal.setdefault("env_passthrough", [])
+    if not isinstance(passthrough, list):
+        raise ValueError("terminal.env_passthrough must be a list")
+    changed = False
+    for name in (
+        "HERMES_C0_POLICY_GUARD_SHA256",
+        "HERMES_C0_POLICY_GUARD_EVIDENCE",
+    ):
+        if name not in passthrough:
+            passthrough.append(name)
+            changed = True
+    if changed:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+        )
+
+
 def policy_guard_source_sha256(directory: str) -> str:
     source = Path(directory) / "sitecustomize.py"
     return hashlib.sha256(source.read_bytes()).hexdigest()
@@ -849,6 +877,7 @@ def main(argv: list[str] | None = None) -> int:
             != args.policy_guard_sha256
         ):
             raise RuntimeError("Hermes policy guard source digest mismatch")
+        prepare_guard_passthrough(Path("/tmp/hermes/config.yaml"))
         gateway = subprocess.Popen(
             gateway_command(find_hermes_command()),
             cwd=args.cwd,

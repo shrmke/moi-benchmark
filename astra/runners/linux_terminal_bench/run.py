@@ -566,6 +566,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if product.id == "dsh":
         _prepare_dsh_runtime(product_root, env)
+    # ShellCrash rejects Docker bridge clients on its public proxy port.
+    # The existing bridge-bound relay reaches it through host loopback.
+    if product.id == "hermes" and not env.get("PI_TBENCH_CACHE_PROXY_URL"):
+        if Path("/usr/share/ShellCrash").is_dir():
+            env["PI_TBENCH_CACHE_PROXY_URL"] = "http://127.0.0.1:7890"
+            env.setdefault("HERMES_TBENCH_BUILD_PROXY", "http://127.0.0.1:7890")
     _prepare_verifier_cache(root, env)
     relay = None
     host_proxy = env.get("PI_TBENCH_CACHE_PROXY_URL")

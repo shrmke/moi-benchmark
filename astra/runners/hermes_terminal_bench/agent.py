@@ -562,6 +562,8 @@ class HermesTerminalBenchC0Agent(Hermes):
             process_probe_source_path(),
             REMOTE_PROCESS_PROBE,
         )
+        from .service_lifetime import install as install_service_lifetime
+        await install_service_lifetime(self, environment)
         await environment.upload_file(
             lifecycle_predicate_probe_source_path(),
             REMOTE_PREDICATE_PROBE,
@@ -1027,7 +1029,7 @@ class HermesTerminalBenchC0Agent(Hermes):
             product_cwd=product_cwd,
         )
         probe_command = process_probe_run_command(
-            probe_path=REMOTE_PROCESS_PROBE,
+            probe_path="/installed-agent/hermes-service-probe.py",
             identity_path=paths["identity"],
             stdout_path=paths["stdout"],
             stderr_path=paths["stderr"],

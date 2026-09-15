@@ -16,14 +16,18 @@ verifier:
   import_path: astra.runners.pi_terminal_bench.verifier:TerminalBenchEvidenceVerifier
   env:
     UV_CONCURRENT_DOWNLOADS: "1"
+    PIP_INDEX_URL: "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+    PIP_EXTRA_INDEX_URL: ""
+    UV_INDEX_URL: "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+    UV_EXTRA_INDEX_URL: ""
     HTTP_PROXY: ${TBENCH_VERIFIER_PROXY}
     HTTPS_PROXY: ${TBENCH_VERIFIER_PROXY}
     http_proxy: ${TBENCH_VERIFIER_PROXY}
     https_proxy: ${TBENCH_VERIFIER_PROXY}
     ALL_PROXY: ""
     all_proxy: ""
-    NO_PROXY: "localhost,127.0.0.1,::1,.debian.org,.ubuntu.com,pypi.org,files.pythonhosted.org,download.pytorch.org"
-    no_proxy: "localhost,127.0.0.1,::1,.debian.org,.ubuntu.com,pypi.org,files.pythonhosted.org,download.pytorch.org"
+    NO_PROXY: "localhost,127.0.0.1,::1,.debian.org,.ubuntu.com,pypi.org,files.pythonhosted.org,mirrors.tuna.tsinghua.edu.cn"
+    no_proxy: "localhost,127.0.0.1,::1,.debian.org,.ubuntu.com,pypi.org,files.pythonhosted.org,mirrors.tuna.tsinghua.edu.cn"
 agents:
   - name: astra.runners.hermes_terminal_bench.agent:HermesTerminalBenchC0Agent
     model_name: "zai/glm-5.2"

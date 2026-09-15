@@ -102,11 +102,27 @@ class TerminalBenchEvidenceVerifier(Verifier):
             / PYTHON_ARCHIVES[python_minor]
         )
         wheelhouse = root / "wheels"
+        def compatible_wheel(path: Path) -> bool:
+            # Keep exact wheel contents/versions; exclude other CPython ABIs.
+            parts = path.stem.rsplit("-", 3)
+            if len(parts) != 4:
+                return False
+            interpreters, abi = parts[1].split("."), parts[2].split(".")
+            current = "cp" + python_minor.replace(".", "")
+            for interpreter in interpreters:
+                if interpreter in {"py3", "py" + python_minor.replace(".", ""), current}:
+                    return True
+                if "abi3" in abi and interpreter.startswith("cp"):
+                    version = interpreter[2:]
+                    if version.isdigit() and version.startswith("3") and int(version[1:]) <= int(python_minor.split(".")[1]):
+                        return True
+            return False
         try:
             wheels = sorted(
                 path
                 for path in wheelhouse.iterdir()
                 if path.suffix == ".whl" and not path.is_symlink()
+                and compatible_wheel(path)
             )
         except OSError as exc:
             raise VerifierInfrastructureError(
