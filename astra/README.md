@@ -7,7 +7,7 @@
 - `research`：当前技术证据；
 - `datasets/manifest.yaml`：候选数据集及冻结门槛；
 - `datasets/linux-terminal-bench-trajectory`：标准化轨迹数据、Hugging Face Dataset Card、质量报告和可复现清洗及 Langfuse 导入脚本；
-- `datasets/toolathlon-trajectory`：Astra Toolathlon 108 题选定 attempt 的清洗、质量报告、选择清单及 Langfuse 导入脚本；
+- `datasets/toolathlon-trajectory`：Astra、Hermes、PI、DSH 的 Toolathlon 选定 attempt 清洗数据、质量报告及 Langfuse 导入脚本；
 - `systems/manifest.yaml`：本地参评系统快照；
 - `runners/`：Astra、Hermes、PI、DSH 的运行器、配置和辅助脚本；
 - `runners/linux_terminal_bench/`：
@@ -31,6 +31,22 @@
 `complete` 表示清洗器已有充分的轨迹采集完整性证据，不表示任务通过，reward 为 `0` 的轨迹也可以属于 `complete`。清洗记录同时保存脱敏后的 verifier CTRF、逐测试诊断、reward 文本和 stdout。
 
 清洗过程省略隐藏 reasoning/thinking 内容，移除图片 base64，并对常见私钥、访问令牌及本机绝对路径进行脱敏。详细 schema、分类规则、逐项统计和复现命令见[轨迹数据说明](datasets/linux-terminal-bench-trajectory/README.md)及[质量报告](datasets/linux-terminal-bench-trajectory/quality_report.json)。用于本地 Langfuse 的 462 条轨迹、434 条评分导入包见[import-cleaned](datasets/linux-terminal-bench-trajectory/langfuse/import-cleaned)。
+
+### Toolathlon 轨迹数据
+
+当前清洗数据包含 Astra、Hermes、PI 和 DSH 的 425 条 Evaluator 有效 Toolathlon 轨迹，共 35,926 条标准化消息和 18,347 次工具调用。每条记录对应一个按正式结果投影选定的 product-task attempt；Astra、Hermes 和 PI 沿用既有 effective result，DSH 按每题 `started_at` 选择最新 attempt，不从历史记录中选择最高分。
+
+| 产品   | complete | partial | 合计 |
+| ------ | -------: | ------: | ---: |
+| Astra  |       78 |      27 |  105 |
+| Hermes |      105 |       3 |  108 |
+| PI     |      100 |       4 |  104 |
+| DSH    |       96 |      12 |  108 |
+| 合计   |      379 |      46 |  425 |
+
+只有 Evaluator 产生结构化且与正式投影一致的 `pass` 或 `no_pass` 时才纳入；Astra 有 3 条缺少有效 Evaluator 结果，PI 有 3 条 Evaluator `unavailable`，因此不进入公开轨迹。`complete` 要求事件序列连续、存在正常终止事件、工具调用与包括 `tool.execution_error` 在内的终态事件配对且计数一致；`partial` 保留可用内容和具体缺失原因，不等同于任务失败。
+
+详细 schema、清洗规则和统计见 [Toolathlon 轨迹说明](datasets/toolathlon-trajectory/README.md)、[四产品质量报告](datasets/toolathlon-trajectory/other_agents_quality_report.json)及 [Langfuse 说明](datasets/toolathlon-trajectory/LANGFUSE.md)。用于本地 Langfuse 的压缩导入包见 [import.jsonl.gz](datasets/toolathlon-trajectory/langfuse/import.jsonl.gz)，包含 425 条 trace 和 425 个与选定轨迹一一对应的 `runner_reward`。
 
 ## Linux Terminal-Bench 2.1 复现
 
