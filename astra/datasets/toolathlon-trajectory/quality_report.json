@@ -1,0 +1,72 @@
+{
+  "generated_at": "2026-09-15T03:56:59.268612+00:00",
+  "schema_version": "toolathlon-trajectory/v1",
+  "selection_rows": 108,
+  "retained": 105,
+  "complete": 78,
+  "partial": 27,
+  "excluded": 3,
+  "evaluator_valid": 105,
+  "outcomes": {
+    "pass": 77,
+    "no_pass": 28
+  },
+  "selection_kinds": {
+    "native": 100,
+    "historical": 4,
+    "offline": 1
+  },
+  "partial_reason_counts_nonexclusive": {
+    "missing_terminal": 2,
+    "tool_count_mismatch": 9,
+    "unpaired_tool_call": 27
+  },
+  "token_usage_coverage": {
+    "complete": 17,
+    "partial": 88
+  },
+  "messages": 11588,
+  "tool_calls": 5576,
+  "reasoning_events": 210986,
+  "excluded_records": [
+    {
+      "record_id": "astra/huggingface-upload/astra969-huggingface-upload-20260913T065144779753Z",
+      "task": "huggingface-upload",
+      "attempt_run_id": "astra969-huggingface-upload-20260913T065144779753Z",
+      "selection_kind": "native",
+      "selected_status": "pass",
+      "source": "work/toolathlon-astra-969550b/batch-108-resumable/huggingface-upload/attempt-1-20260913T065144779753Z",
+      "evaluator_source": null,
+      "included": false,
+      "exclusion_reasons": [
+        "missing_or_invalid_evaluator"
+      ]
+    },
+    {
+      "record_id": "astra/nvidia-stock-analysis/astra969-nvidia-stock-analysis-20260914T000042182805Z",
+      "task": "nvidia-stock-analysis",
+      "attempt_run_id": "astra969-nvidia-stock-analysis-20260914T000042182805Z",
+      "selection_kind": "native",
+      "selected_status": "pass",
+      "source": "work/toolathlon-astra-969550b/batch-108-resumable/nvidia-stock-analysis/attempt-1-20260914T000042182805Z",
+      "evaluator_source": null,
+      "included": false,
+      "exclusion_reasons": [
+        "missing_or_invalid_evaluator"
+      ]
+    },
+    {
+      "record_id": "astra/trip-itinerary-generator/astra969-trip-itinerary-generator-20260914T063233764851Z",
+      "task": "trip-itinerary-generator",
+      "attempt_run_id": "astra969-trip-itinerary-generator-20260914T063233764851Z",
+      "selection_kind": "native",
+      "selected_status": "pass",
+      "source": "work/toolathlon-astra-969550b/batch-108-resumable/trip-itinerary-generator/attempt-1-20260914T063233764851Z",
+      "evaluator_source": null,
+      "included": false,
+      "exclusion_reasons": [
+        "missing_or_invalid_evaluator"
+      ]
+    }
+  ]
+}
