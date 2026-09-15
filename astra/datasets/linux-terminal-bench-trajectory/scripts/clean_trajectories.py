@@ -744,6 +744,37 @@ def verifier_counts(trial: Path) -> dict[str, int | None]:
     }
 
 
+
+def redact_structure(value: Any, redactor: Redactor) -> Any:
+    if isinstance(value, dict):
+        return {str(key): redact_structure(item, redactor) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_structure(item, redactor) for item in value]
+    if isinstance(value, str):
+        return redactor.text(value)
+    return value
+
+
+def public_text(path: Path, redactor: Redactor) -> str | None:
+    try:
+        return redactor.text(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def verifier_details(
+    trial: Path, result: dict[str, Any], redactor: Redactor
+) -> dict[str, Any]:
+    execution = result.get("verifier") or {}
+    report = load_json(trial / "verifier" / "ctrf.json")
+    return {
+        "started_at": as_timestamp(execution.get("started_at")),
+        "finished_at": as_timestamp(execution.get("finished_at")),
+        "reward_text": public_text(trial / "verifier" / "reward.txt", redactor),
+        "ctrf": redact_structure(report, redactor) if report is not None else None,
+        "test_stdout": public_text(trial / "verifier" / "test-stdout.txt", redactor),
+    }
+
 def trials(product_root: Path) -> list[Path]:
     jobs = product_root / "jobs"
     if not jobs.is_dir():
@@ -869,6 +900,7 @@ def build_record(
             "product_status": md.get("product_terminal_status"),
             "exception_type": exception_type,
         },
+        "verifier": verifier_details(trial, result, redactor),
         "usage": {
             "input_tokens": ((result.get("agent_result") or {}).get("n_input_tokens")),
             "cache_tokens": ((result.get("agent_result") or {}).get("n_cache_tokens")),

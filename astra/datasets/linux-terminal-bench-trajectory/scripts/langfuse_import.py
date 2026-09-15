@@ -4,39 +4,21 @@ from __future__ import annotations
 import argparse
 import base64
 from datetime import datetime, timedelta, timezone
-from functools import lru_cache
 from http.client import HTTPException
-import importlib.util
 import json
 import os
 from pathlib import Path
-import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 import uuid
 
-ROOT = Path(__file__).resolve().parents[4]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from astra.runners.linux_terminal_bench.products import PRODUCTS
-from astra.runners.linux_terminal_bench.results import latest_results, verifier_status
-
-CLEANER = ROOT / "astra/datasets/linux-terminal-bench-trajectory/scripts/clean_trajectories.py"
-
+DATASET = Path(__file__).resolve().parent.parent
+PRODUCTS = ("astra", "dsh", "hermes", "pi")
 
 def dump(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False)
-
-
-@lru_cache(maxsize=1)
-def load_cleaner():
-    spec = importlib.util.spec_from_file_location("trajectory_cleaner", CLEANER)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def nanos(value):
@@ -80,33 +62,40 @@ def chat_messages(messages):
     return output
 
 
-def make_item(record, result, path, selected_path, batch_id):
-    status, reward, count, error = verifier_status(result, path)
-    selected = selected_path is not None and path.resolve() == selected_path.resolve()
+
+def record_reward(record):
+    reward = (record.get("outcome") or {}).get("reward")
+    if isinstance(reward, bool) or not isinstance(reward, (int, float)) or reward not in (0, 1):
+        return None
+    return int(reward)
+
+
+def make_item(record, batch_id):
+    outcome = record.get("outcome") or {}
+    reward = record_reward(record)
+    status = "passed" if reward == 1 else "failed" if reward == 0 else "invalid_verifier"
     product = record["agent"]["product"]
     task = record["benchmark"]["task_id"]
     trace_id, span_id = uuid.uuid4().hex, uuid.uuid4().hex[:16]
-    # Actual trial boundaries only. Per-call boundaries are absent in the cleaned schema.
     start, end = nanos(record["trial"]["started_at"]), nanos(record["trial"]["finished_at"])
     if int(end) < int(start):
         raise ValueError(f"negative trial duration: {record['record_id']}")
+    passed, failed = outcome.get("verifier_passed"), outcome.get("verifier_failed")
+    test_count = passed + failed if type(passed) is int and type(failed) is int else None
     metadata = {
         "import_batch": batch_id, "record_id": record["record_id"],
         "product": product, "task": task, "model": record["agent"]["model_name"],
         "attempt_index": record["trial"]["attempt_index"],
-        "runner_selected_latest": selected, "verifier_status": status,
-        "reward": reward,
-        "raw_reward": ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward"),
-        "verifier_test_count": count,
-        "verifier_passed": record.get("outcome", {}).get("verifier_passed"),
-        "verifier_failed": record.get("outcome", {}).get("verifier_failed"),
-        "verifier_evidence_error": load_cleaner().Redactor().text(error),
+        "verifier_status": status, "reward": reward,
+        "raw_reward": outcome.get("raw_structured_reward"),
+        "verifier_test_count": test_count,
+        "verifier_passed": passed, "verifier_failed": failed,
+        "verifier_details": record.get("verifier"),
         "quality_tier": record["quality"]["tier"],
-        "quality_basis": "cleaner; formal reward uses runner.verifier_status",
+        "quality_basis": "cleaned dataset; score uses outcome.reward",
         "missing_fields": [f"usage.{k}" for k, v in record["usage"].items() if v is None]
             + [f"timing.{k}" for k, v in record["timing"].items() if v is None]
-            + [key for key in ("verifier_passed", "verifier_failed")
-               if record.get("outcome", {}).get(key) is None]
+            + [key for key in ("verifier_passed", "verifier_failed") if outcome.get(key) is None]
             + ["per_call_start_end", "per_call_usage"],
         "usage": record["usage"], "timing": record["timing"],
         "benchmark": record["benchmark"], "agent": record["agent"],
@@ -129,15 +118,13 @@ def make_item(record, result, path, selected_path, batch_id):
             "attributes": attributes}
     scores = []
     if reward is not None:
-        for name in (["runner_reward", "runner_reward_latest"] if selected else ["runner_reward"]):
-            scores.append({"id": str(uuid.uuid4()), "traceId": trace_id,
-                           "observationId": span_id, "name": name, "value": reward,
-                           "dataType": "NUMERIC", "environment": "benchmark-offline",
-                           "comment": "runner.verifier_status; filter one import_batch",
-                           "metadata": {"import_batch": batch_id, "record_id": record["record_id"]}})
+        scores.append({"id": str(uuid.uuid4()), "traceId": trace_id,
+                       "observationId": span_id, "name": "runner_reward", "value": reward,
+                       "dataType": "NUMERIC", "environment": "benchmark-offline",
+                       "comment": "cleaned dataset outcome.reward; filter one import_batch",
+                       "metadata": {"import_batch": batch_id, "record_id": record["record_id"]}})
     return {"record_id": record["record_id"], "trace_id": trace_id,
-            "span_id": span_id, "runner_selected_latest": selected,
-            "reward": reward, "verifier_status": status,
+            "span_id": span_id, "reward": reward, "verifier_status": status,
             "payload": {"resourceSpans": [{"resource": {"attributes": [
                 attr("service.name", "linux-terminal-bench-offline")]},
                 "scopeSpans": [{"scope": {"name": "linux-terminal-bench-offline"}, "spans": [span]}]}]},
@@ -145,62 +132,33 @@ def make_item(record, result, path, selected_path, batch_id):
 
 
 def prepare(args):
-    cleaner = load_cleaner()
-    source = args.source.resolve()
-    if not source.is_dir():
-        raise ValueError(f"Source directory not found: {source}")
+    dataset = args.dataset.resolve()
+    if not dataset.is_dir():
+        raise ValueError(f"Dataset directory not found: {dataset}")
+    dataset_report = json.loads((dataset / "quality_report.json").read_text())
     batch_id = str(uuid.uuid4())
     report = {"import_batch": batch_id, "generated_at": datetime.now(timezone.utc).isoformat(),
-              "source": str(source), "products": {}}
-    dataset = getattr(args, "dataset", None)
-    if dataset is not None:
-        report["dataset"] = str(dataset.resolve())
-        dataset_report = json.loads((dataset / "quality_report.json").read_text())
+              "dataset": str(dataset), "products": {}}
     items = []
     for product in args.products:
-        if dataset is None:
-            records, quality = cleaner.clean_product(product, source, cleaner.dataset_revision(source))
-        else:
-            records = []
-            for tier in ("complete", "partial"):
-                with (dataset / "data" / tier / f"{product}.jsonl").open() as stream:
-                    records.extend(json.loads(line) for line in stream if line.strip())
-            cleaner.validate(records)
-            if any(record["agent"]["product"] != product for record in records):
-                raise ValueError(f"Dataset product mismatch: {product}")
-            quality = dataset_report["products"][product]
-        tasks = {r["benchmark"]["task_id"] for r in records}
-        latest = latest_results(source / product / "jobs", tasks, PRODUCTS[product])
-        if dataset is not None:
-            # Supplement records can reference isolated retry jobs. Apply the
-            # same runner selection to those directories, including excluded
-            # metadata-only attempts, rather than promoting an older trace.
-            jobs_roots = {(source / r["source"]["trial_path"] / "result.json").parents[2]
-                          for r in records}
-            for jobs in sorted(jobs_roots):
-                for task, candidate in latest_results(jobs, tasks, PRODUCTS[product]).items():
-                    previous = latest.get(task)
-                    if previous is None or (str(candidate[0]["finished_at"]), str(candidate[1])) > (
-                            str(previous[0]["finished_at"]), str(previous[1])):
-                        latest[task] = candidate
-        product_items = []
-        for record in records:
-            path = source / record["source"]["trial_path"] / "result.json"
-            result = json.loads(path.read_text())
-            selected_path = latest.get(record["benchmark"]["task_id"], (None, None))[1]
-            product_items.append(make_item(record, result, path, selected_path, batch_id))
-        eligible = [x for x in product_items if x["runner_selected_latest"] and x["reward"] is not None]
+        records = []
+        for tier in ("complete", "partial"):
+            with (dataset / "data" / tier / f"{product}.jsonl").open() as stream:
+                records.extend(json.loads(line) for line in stream if line.strip())
+        if any(record["agent"]["product"] != product for record in records):
+            raise ValueError(f"Dataset product mismatch: {product}")
+        product_items = [make_item(record, batch_id) for record in records]
+        scored = [item for item in product_items if item["reward"] is not None]
         report["products"][product] = {
-            "quality": quality, "traces": len(product_items),
-            "selected_traces": sum(x["runner_selected_latest"] for x in product_items),
-            "selected_valid_traces": len(eligible),
-            "selected_passed_traces": sum(x["reward"] == 1 for x in eligible),
-            "selected_subset_mean_reward": sum(x["reward"] for x in eligible) / len(eligible) if eligible else None,
+            "quality": dataset_report["products"][product], "traces": len(product_items),
+            "scored_traces": len(scored),
+            "passed_traces": sum(item["reward"] == 1 for item in scored),
+            "mean_reward": sum(item["reward"] for item in scored) / len(scored) if scored else None,
         }
         items.extend(product_items)
-        print(f"{product}: {len(product_items)} traces, {len(eligible)} selected valid", flush=True)
+        print(f"{product}: {len(product_items)} traces, {len(scored)} scored", flush=True)
     report["traces"] = len(items)
-    report["scores"] = sum(len(x["scores"]) for x in items)
+    report["scores"] = sum(len(item["scores"]) for item in items)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8") as stream:
         stream.write(dump({"report": report}) + "\n")
@@ -302,8 +260,7 @@ def verify(args):
                     failures.append({"record_id": item["record_id"], "reason": f"timestamp mismatch: {field}"})
             metadata = row.get("metadata") or {}
             expected_metadata = {
-                "reward": item["reward"], "runner_selected_latest": item["runner_selected_latest"],
-                "import_batch": report["import_batch"],
+                "reward": item["reward"], "import_batch": report["import_batch"],
             }
             for field in ("usage", "timing"):
                 encoded = next(a["value"]["stringValue"] for a in span["attributes"]
@@ -339,9 +296,8 @@ def verify(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    prep = sub.add_parser("prepare", help="Read raw trials, clean and apply runner result rules; no network")
-    prep.add_argument("--source", type=Path, default=ROOT / "work/linux-terminal-bench")
-    prep.add_argument("--dataset", type=Path, help="Import existing cleaned JSONL instead of cleaning raw jobs again")
+    prep = sub.add_parser("prepare", help="Build a bundle directly from cleaned dataset JSONL; no network")
+    prep.add_argument("--dataset", type=Path, default=DATASET, help="Cleaned trajectory dataset root")
     prep.add_argument("--products", nargs="+", choices=PRODUCTS, default=list(PRODUCTS))
     prep.add_argument("--output", type=Path, required=True)
     imp = sub.add_parser("import", help="Upload prepared bundle; retries reuse the bundle's IDs")
