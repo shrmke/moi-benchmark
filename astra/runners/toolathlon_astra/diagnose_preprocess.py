@@ -8,8 +8,8 @@ from pathlib import Path
 import sys
 import traceback
 
-from toolathlon_astra_969550b import Lifecycle, base
-from toolathlon_astra_969550b_batch import load_key
+from toolathlon_astra.runner import Lifecycle, base
+from toolathlon_astra.batch import load_key
 
 class Prepared(Exception):
     pass

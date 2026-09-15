@@ -10,7 +10,7 @@ through the entry points documented here.
 
 ## What is reproduced
 
-- Astra 969550b runs independently through `run_astra_969550b_108.sh`; see the
+- Astra 969550b runs independently through `toolathlon_astra/run_108.sh`; see the
   current standalone runner instructions below.
 - Historical Astra and Hermes run as a serial, paired 108-task experiment. The launcher
   first creates the qualification pair, then runs the first 14 tasks (M2) and
@@ -47,6 +47,11 @@ application credential fingerprints are refreshed at the start of a new batch.
 Use this entry point for Astra commit
 `969550b611ceba11653c4b2651079bcb85d1c24e`. Do not use the historical
 Astra/Hermes paired launcher below to reproduce this version.
+
+Implementation and operational helpers are grouped under
+[`toolathlon_astra/`](toolathlon_astra/README.md). The previous root-level
+launchers and Python module names remain compatibility entry points. Existing
+output directories, lock paths, credentials and task manifests are unchanged.
 
 ### Runtime and deployment prerequisites
 
@@ -129,7 +134,7 @@ To start an existing deployment without recreating its data:
 
 ```bash
 cd /home/vagrant/moi-benchmark
-bash astra/runners/restore_toolathlon_services.sh
+bash astra/runners/toolathlon_astra/restore_services.sh
 ```
 
 The restore script starts its configured MatrixOne, Memoria, WooCommerce,
@@ -163,7 +168,7 @@ export PYTHONPATH="$PWD/astra/runners${PYTHONPATH:+:$PYTHONPATH}"
 
 run_id="astra969-find-alita-paper-$(date -u +%Y%m%dT%H%M%SZ)"
 /home/vagrant/dataset/Toolathlon/.venv/bin/python -u \
-  -m toolathlon_astra_969550b \
+  -m toolathlon_astra.runner \
   --system astra \
   --task-id find-alita-paper \
   --experiment-id toolathlon-astra-969550b-smoke \
@@ -185,7 +190,7 @@ MatrixOne at five-task boundaries:
 
 ```bash
 cd /home/vagrant/moi-benchmark
-bash astra/runners/run_astra_969550b_108.sh \
+bash astra/runners/toolathlon_astra/run_108.sh \
   --output-dir work/toolathlon-astra-969550b/batch-108-new \
   --models-file external/astra-optimize_0731_05/.models.yaml \
   --toolathlon-source /home/vagrant/dataset/Toolathlon \
@@ -209,7 +214,7 @@ restored from a previous launch:
 
 ```bash
 cd /home/vagrant/moi-benchmark
-bash astra/runners/run_astra_969550b_108.sh \
+bash astra/runners/toolathlon_astra/run_108.sh \
   --output-dir work/toolathlon-astra-969550b/batch-108-new \
   --resume \
   --restart-matrixone-every 5
@@ -222,7 +227,7 @@ startup error:
 ```bash
 tmux new-session -d -s astra-toolathlon \
   -c /home/vagrant/moi-benchmark \
-  'bash astra/runners/run_astra_969550b_108.sh --output-dir work/toolathlon-astra-969550b/batch-108-new --resume --restart-matrixone-every 5; rc=$?; printf "Runner exited: %s\n" "$rc"; exec bash'
+  'bash astra/runners/toolathlon_astra/run_108.sh --output-dir work/toolathlon-astra-969550b/batch-108-new --resume --restart-matrixone-every 5; rc=$?; printf "Runner exited: %s\n" "$rc"; exec bash'
 tmux attach -t astra-toolathlon
 ```
 
@@ -251,7 +256,7 @@ making model requests:
 
 ```bash
 cd /home/vagrant/moi-benchmark
-bash astra/runners/run_astra_969550b_108.sh \
+bash astra/runners/toolathlon_astra/run_108.sh \
   --output-dir work/toolathlon-astra-969550b/batch-108-new \
   --status
 ```

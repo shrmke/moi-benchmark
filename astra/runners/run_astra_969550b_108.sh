@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
+# Compatibility entry point; keep existing deployment commands working.
 set -euo pipefail
-set +x
-root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-cd "$root"
-export PYTHONPATH="$root/astra/runners${PYTHONPATH:+:$PYTHONPATH}"
-exec /home/vagrant/dataset/Toolathlon/.venv/bin/python -u -m toolathlon_astra_969550b_batch "$@"
+runner_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+exec bash "$runner_dir/toolathlon_astra/run_108.sh" "$@"
