@@ -18,23 +18,19 @@
 
 ### Terminal-Bench 2.1 轨迹数据
 
-当前清洗数据包含 Astra、DSH、Hermes 和 PI 在 Terminal-Bench 2.1 上的 461 条有效 trial，共 24,817 条标准化消息和 12,553 次工具调用。消息统一为 `user`、`assistant`、`tool` 结构；数据仅发布 `complete` 和 `partial` 两个 split，另有 95 条只有运行元数据或缺少有效用户/助手对话的记录未发布。
+当前清洗数据包含 Astra、DSH、Hermes 和 PI 在 Terminal-Bench 2.1 上的 462 条有效 trial，共 24,832 条标准化消息和 12,560 次工具调用。消息统一为 `user`、`assistant`、`tool` 结构；数据仅发布 `complete` 和 `partial` 两个 split，另有 95 条只有运行元数据或缺少有效用户/助手对话的记录未发布。
 
 | 产品   | complete | partial | 合计 |
 | ------ | -------: | ------: | ---: |
 | Astra  |      106 |      27 |  133 |
 | DSH    |       68 |      27 |   95 |
-| Hermes |      126 |      10 |  136 |
+| Hermes |      126 |      11 |  137 |
 | PI     |       57 |      40 |   97 |
-| 合计   |      357 |     104 |  461 |
+| 合计   |      357 |     105 |  462 |
 
-`complete` 表示清洗器已有充分的轨迹采集完整性证据，不表示任务通过，reward 为 `0` 的轨迹也可以属于 `complete`。Astra 补充轨迹按 `run_id` 将数据库 transcript 与终止事件中的工具调用计数逐段核对；所有 run 均有可比较计数且完全一致时进入 `complete`。Astra 的 verifier 有效性独立记录，不降级已证明完整的轨迹；其余 27 条因计数不一致、事件覆盖不足或 native 回退无法交叉核对而保留为 `partial`。DSH、Hermes 和 PI 仍按轨迹保存、终止事件、工具配对和 verifier 有效性共同判定。
+`complete` 表示清洗器已有充分的轨迹采集完整性证据，不表示任务通过，reward 为 `0` 的轨迹也可以属于 `complete`。清洗记录同时保存脱敏后的 verifier CTRF、逐测试诊断、reward 文本和 stdout。
 
-清洗过程省略隐藏 reasoning/thinking 内容，移除图片 base64，并对常见私钥、访问令牌及本机绝对路径进行脱敏。详细 schema、分类规则、逐项统计和复现命令见[轨迹数据说明](datasets/linux-terminal-bench-trajectory/README.md)及[质量报告](datasets/linux-terminal-bench-trajectory/quality_report.json)。用于本地 Langfuse 的 461 条轨迹、780 条评分导入包见[import-cleaned](datasets/linux-terminal-bench-trajectory/langfuse/import-cleaned)，prepare/import/verify 和部署说明见 [Langfuse 说明](datasets/linux-terminal-bench-trajectory/LANGFUSE.md)。
-
-### Toolathlon 轨迹数据
-
-Astra Toolathlon 轨迹数据按正式 108 题结果 CSV 锁定每题唯一 attempt，`record_id` 为 `astra/<task>/<attempt-run-id>`。只有具有结构化且可判定 `pass` 或 `no_pass` 的有效 Evaluator 结果才纳入；同一 attempt 的受控续接合并为一条轨迹。可用的 `reasoning_delta` 经脱敏后保存在 `reasoning_content`，Token usage 缺失保留为 `null` 且不影响 `complete` / `partial`。清洗规则和命令见 [Toolathlon 轨迹说明](datasets/toolathlon-trajectory/README.md)，Langfuse prepare/import/verify 见 [Toolathlon Langfuse 说明](datasets/toolathlon-trajectory/LANGFUSE.md)。
+清洗过程省略隐藏 reasoning/thinking 内容，移除图片 base64，并对常见私钥、访问令牌及本机绝对路径进行脱敏。详细 schema、分类规则、逐项统计和复现命令见[轨迹数据说明](datasets/linux-terminal-bench-trajectory/README.md)及[质量报告](datasets/linux-terminal-bench-trajectory/quality_report.json)。用于本地 Langfuse 的 462 条轨迹、434 条评分导入包见[import-cleaned](datasets/linux-terminal-bench-trajectory/langfuse/import-cleaned)。
 
 ## Linux Terminal-Bench 2.1 复现
 

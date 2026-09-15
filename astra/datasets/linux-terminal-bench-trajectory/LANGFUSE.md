@@ -4,17 +4,16 @@
 
 ## 数据与评分口径
 
-- `prepare` 读取当前原始 trial，复用 `astra/datasets/linux-terminal-bench-trajectory/scripts/clean_trajectories.py` 的四产品解析和脱敏。不依赖之前发布的三产品 JSONL 快照。
+- `prepare` 直接读取 `data/complete` 与 `data/partial` 中的四产品清洗 JSONL，不依赖原始 jobs、`result.json` 或 runner 环境。
 - 排除未结束、无法解析、没有 user 或 assistant 消息的记录（包括 metadata-only）。其余 complete 和 partial 均保留。
 - 一次 attempt 对应一个 trace，含一个 agent root observation。Input 是任务指令，Output 是有序对话；工具调用转成 OpenAI message 格式，参数和结果由 `tool_call_id` 配对。
 - root 时间来自真实 trial 起止时间。没有完整调用边界，不生成逐调用 span 或 Generation；不把 message 时间戳当成工具耗时，不把任务 token 总量摊到每轮。
 - token、费用、阶段耗时保存在 metadata 的 `usage` / `timing`。源数据缺失保留 JSON `null`；`missing_fields` 明确列出缺项。Langfuse 原生 token/费用栏可能为空，应查看这些 metadata，而不能将空栏理解为零。
 - `message_details` 按原消息顺序记录 seq、timestamp、is_error、internal_content_omitted；隐藏 reasoning 不恢复。
-- 正式 reward 调用当前 `results.verifier_status()`，含 CTRF 和基础设施异常判定；`raw_reward`、`reward`、`verifier_status` 分别保存。无效结果不产生数值评分。
+- reward 直接使用清洗记录的 `outcome.reward`；该字段仅在清洗阶段确认 verifier 有效且 reward 为结构化 `0` 或 `1` 时有值。无效结果不产生数值评分。脱敏后的 verifier CTRF、逐测试诊断和 stdout 保存在 metadata 的 `verifier_details`。
 - `quality_tier` 是清洗器的数据完整性分类，和 runner 的结果有效性独立。不要用 complete 表示通过。
-- `runner_reward`：每个具有有效 verifier 的已导入 attempt 的得分，用于单条复盘。
-- `runner_reward_latest`：额外只给 `latest_results()` 选中的 attempt 打分；`runner_selected_latest=true` 标识选择结果。选择在原始 jobs 中进行，沿用产品配置与时间规则；如果最新 attempt 是被排除的 metadata-only，旧 attempt 不会被递补。
-- **成功率必须筛选单个 `import_batch`，只聚合 `runner_reward_latest`。** 这个结果是可分析轨迹子集的成功率；正式全部任务成绩仍查看 runner 的 `state/analysis/summary.json`。
+- `runner_reward`：每个具有有效 `outcome.reward` 的已导入 attempt 仅生成这一项评分，用于单条轨迹复盘。
+- 导入包不选择 latest attempt，也不生成 `runner_reward_latest`。存在同任务多次 attempt 时，`runner_reward` 的整体均值不是正式任务成功率；正式成绩仍查看 runner 汇总。
 
 ## 1. 在本机部署
 
@@ -49,7 +48,7 @@ python3 astra/datasets/linux-terminal-bench-trajectory/scripts/langfuse_import.p
   --output work/linux-terminal-bench/langfuse/import.jsonl
 ```
 
-默认读取四款产品。可用 `--products pi hermes` 选择产品，或用 `--source /path/to/linux-terminal-bench` 指向另一份原始数据。
+默认从脚本所属数据集目录读取四款产品。可用 `--products pi hermes` 选择产品，或用 `--dataset /path/to/linux-terminal-bench-trajectory` 指向另一份清洗数据集。
 
 包的第一行是统计 report，后续每行是一个 attempt 的 OTLP 请求和评分请求。报告含产品轨迹数、被排除记录的原因、选中的有效任务数及子集成功率。准备过程无模型调用、无网络上传。
 
@@ -88,7 +87,7 @@ python3 astra/datasets/linux-terminal-bench-trajectory/scripts/langfuse_import.p
 3. 按 metadata 的 `product`、`task`、`verifier_status`、`quality_tier` 筛选；按 task 查看不同产品或 attempt。
 4. 打开一条 trace，查看 root 的 Input / Output。Output 展示任务期间的完整有序对话和工具调用；metadata 保存缺失值、数据来源和消息细节。
 5. 失败复盘用 `verifier_status=failed`；基础设施故障单独筛选，不能解释为模型答错。
-6. 在单批次范围内，仅 `runner_reward_latest` 的均值可以用于所选有效轨迹的成功率。`runner_reward` 的全量均值会混入多次尝试。
+6. `runner_reward` 对应单条轨迹自身 reward；同一任务存在多次 attempt 时不能直接用全量均值代替正式任务成功率。
 
 当前版本不产生伪造的逐步耗时瀑布图，也不提供容器重放。图形界面的具体字段布局随 Langfuse 版本变化；完整数据是否入库以 verify 的 API 回读为准。
 
@@ -114,21 +113,9 @@ python3 -m unittest discover \
 
 参考：[官方 OTLP 接口](https://langfuse.com/integrations/native/opentelemetry)、[公开 API](https://langfuse.com/docs/api-and-data-platform/features/public-api)、[官方自托管说明](https://langfuse.com/self-hosting)。
 
-## 本次服务器执行记录（2026-09-11）
+## 当前数据集导入包
 
-- 已部署 Langfuse **4.33.0**，访问地址 `http://localhost:17300`（远程访问使用前述 SSH 隧道）。管理员登录已验证。
-- 导入包：`work/linux-terminal-bench/langfuse/import.jsonl`，数据快照准备于 **2026-09-11 03:30 UTC**。正在运行的测评后续新增结果不自动进入此快照。
-- 批次：`67dbbb1b-0c3c-44c3-8c3f-5f50568086da`。
-- 全量导入 **384 条轨迹、670 条评分**；于 **2026-09-11 06:13 UTC** 完成逐条回读，**0 项失败**。
-- 核对范围：完整对话、trial 起止时间、usage/timing（含 null）、有效 reward、最新 attempt 标记和评分值。
-- 报告：`work/linux-terminal-bench/langfuse/verification.json`；导入和回读日志分别为同目录 `import.log`、`verify.log`。
-- 本地 importer 与 runner 结果测试共 **13 项通过**。Web 设置 1536 MiB 容器内存上限和 1024 MiB Node.js 堆上限，解决初始化时默认堆不足；完成导入后六个容器均无重启。
-
-| 产品 | 导入轨迹 | 选中且具有有效 reward 的轨迹 |
-| --- | ---: | ---: |
-| Astra | 84 | 57 |
-| Hermes | 108 | 88 |
-| Pi | 97 | 87 |
-| DSH | 95 | 88 |
-
-该表右列遵循快照生成时 runner 的 attempt 选择和有效性规则。metadata-only 被排除后，不会回退选择旧 attempt。
+- 导入包：`astra/datasets/linux-terminal-bench-trajectory/langfuse/import-cleaned`。
+- 批次：`af635a80-c5a8-4847-9c10-46e5f88bf93f`。
+- 当前包共 **462 条轨迹、434 条 `runner_reward` 评分**。
+- 该包由清洗 JSONL 直接生成，不依赖原始 jobs；尚未上传到任何 Langfuse 实例，完成 import 后仍须逐条执行 verify。

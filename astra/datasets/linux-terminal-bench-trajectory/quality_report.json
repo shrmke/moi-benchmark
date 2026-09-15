@@ -1,6 +1,6 @@
 {
   "dataset_revision": "5c8eadf1f393183288fa08b8f73ca9a469cc5e00",
-  "generated_at": "2026-09-11T09:46:45.702637+00:00",
+  "generated_at": "2026-09-15T08:09:05.812861+00:00",
   "products": {
     "astra": {
       "discovered_trials": 146,
@@ -16,7 +16,7 @@
       },
       "messages": 6432,
       "tool_calls": 3084,
-      "redactions": 73
+      "redactions": 85
     },
     "dsh": {
       "complete": 68,
@@ -41,8 +41,8 @@
       "tool_calls": 2254
     },
     "hermes": {
-      "complete": 98,
-      "discovered_trials": 144,
+      "complete": 126,
+      "discovered_trials": 173,
       "excluded_metadata_only": 36,
       "excluded_reason_counts_nonexclusive": {
         "missing_assistant": 36,
@@ -50,15 +50,17 @@
         "missing_result": 1,
         "missing_user": 1
       },
-      "messages": 7144,
-      "partial": 10,
+      "messages": 9025,
+      "partial": 11,
       "partial_reason_counts_nonexclusive": {
-        "invalid_verifier": 9,
+        "capture_not_saved": 1,
+        "invalid_verifier": 10,
+        "missing_terminal": 1,
         "unpaired_tool_call": 1
       },
       "redactions": 5,
-      "retained": 108,
-      "tool_calls": 3664
+      "retained": 137,
+      "tool_calls": 4629
     },
     "pi": {
       "complete": 57,
@@ -96,14 +98,14 @@
   },
   "source_root": "<WORKSPACE>/work/linux-terminal-bench",
   "totals": {
-    "discovered_trials": 528,
-    "complete": 329,
-    "partial": 104,
-    "retained": 433,
+    "discovered_trials": 557,
+    "complete": 357,
+    "partial": 105,
+    "retained": 462,
     "excluded_metadata_only": 95,
-    "messages": 22951,
-    "tool_calls": 11595,
-    "redactions": 217
+    "messages": 24832,
+    "tool_calls": 12560,
+    "redactions": 229
   },
   "astra_source": "astra/trace-supplements/all-verifier-attempts"
 }

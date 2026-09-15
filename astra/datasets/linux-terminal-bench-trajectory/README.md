@@ -55,6 +55,7 @@ reward 为 `0` 的轨迹只要 verifier 有效，也可以属于 `complete`。As
 - `messages`：统一为 `user`、`assistant`、`tool` 三种角色；工具调用位于 assistant 消息的 `tool_calls`，工具结果通过 `tool_call_id` 配对。
 - `outcome`：reward、verifier 有效性及异常类型。
 - `outcome.verifier_passed`、`outcome.verifier_failed`：原始 `verifier/ctrf.json` 的 `results.summary.passed` / `failed` 小项计数；缺失、不可读或不是非负整数时为 `null`，真实的零保留为 `0`。计数独立于 verifier 有效性，不改变 reward 或完整性分类。
+- `verifier`：脱敏后的 verifier 执行起止时间、`reward.txt`、完整 CTRF 结构（含逐测试状态、message/trace）和 `test-stdout.txt`；文件缺失时对应字段为 `null`。
 - `usage`、`timing`：token、费用、工具调用和耗时信息；源数据没有提供的值为 `null`。
 - `quality`：分层、失败原因和完整性指标。
 - `source`：相对于原始数据根目录的 trial/trace 路径及原始格式名称。
