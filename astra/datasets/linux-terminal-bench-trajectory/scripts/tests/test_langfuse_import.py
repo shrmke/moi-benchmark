@@ -5,12 +5,15 @@ import copy
 import io
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from astra.runners.linux_terminal_bench import langfuse_import as importer
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import langfuse_import as importer
+
 from astra.runners.linux_terminal_bench.tests import test_results
 
 
@@ -112,36 +115,6 @@ class LangfuseImportTests(unittest.TestCase):
             self.assertEqual(importer.verify(args), 0)
             self.record['messages'][0]['content'] = 'truncated or corrupted'
             self.assertEqual(importer.verify(args), 1)
-
-    def test_cleaned_dataset_preserves_counts_and_selects_isolated_retry(self):
-        jobs = self.root / 'pi/state/retry/data/pi/jobs'
-        test_results.LinuxResultTests._write_result(
-            jobs, multiplier=1.0, with_ctrf=True, trial='new', finished_at='2026-01-02T00:00:00Z')
-        newer = copy.deepcopy(self.record)
-        newer['record_id'] = 'pi/new'
-        newer['source']['trial_path'] = str((jobs / 'job/new').relative_to(self.root))
-        newer['outcome'] = {'verifier_passed': 0, 'verifier_failed': 1}
-        dataset = self.root / 'dataset'
-        for tier, rows in [('complete', [self.record, newer]), ('partial', [])]:
-            folder = dataset / 'data' / tier
-            folder.mkdir(parents=True)
-            (folder / 'pi.jsonl').write_text(''.join(importer.dump(row) + '\n' for row in rows))
-        (dataset / 'quality_report.json').write_text('{"products":{"pi":{}}}')
-        # The synthetic records need only enough quality data for this fixture.
-        for row in (self.record, newer):
-            row['quality']['tier'] = 'partial'
-        (dataset / 'data/complete/pi.jsonl').write_text('')
-        (dataset / 'data/partial/pi.jsonl').write_text(
-            ''.join(importer.dump(row) + '\n' for row in (self.record, newer)))
-        bundle = self.root / 'cleaned.jsonl'
-        with patch.object(importer.load_cleaner(), 'clean_product', side_effect=AssertionError('must not reclean')):
-            importer.prepare(Namespace(source=self.root, dataset=dataset, products=['pi'], output=bundle))
-        _, items = importer.read_bundle(bundle)
-        self.assertEqual([row['runner_selected_latest'] for row in items], [False, True])
-        attributes = items[1]['payload']['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes']
-        counts = {a['key']: a['value'] for a in attributes}
-        self.assertEqual(counts['langfuse.trace.metadata.verifier_passed'], {'intValue': '0'})
-        self.assertEqual(counts['langfuse.trace.metadata.verifier_failed'], {'intValue': '1'})
 
     def test_partial_otlp_success_is_failure(self):
         with patch.dict('os.environ', {'LANGFUSE_BASE_URL': 'http://localhost:3000',

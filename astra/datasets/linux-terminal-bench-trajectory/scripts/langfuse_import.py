@@ -10,16 +10,20 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 import uuid
 
-from .products import PRODUCTS
-from .results import latest_results, verifier_status
+ROOT = Path(__file__).resolve().parents[4]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-ROOT = Path(__file__).resolve().parents[3]
+from astra.runners.linux_terminal_bench.products import PRODUCTS
+from astra.runners.linux_terminal_bench.results import latest_results, verifier_status
+
 CLEANER = ROOT / "astra/datasets/linux-terminal-bench-trajectory/scripts/clean_trajectories.py"
 
 
