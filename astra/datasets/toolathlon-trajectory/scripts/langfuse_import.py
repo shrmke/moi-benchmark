@@ -1,4 +1,4 @@
-"""Prepare, import and verify cleaned Astra Toolathlon trajectories in Langfuse."""
+"""Prepare, import and verify cleaned Toolathlon trajectories in Langfuse."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import gzip
 import json
 from pathlib import Path
 import sys
@@ -33,7 +34,7 @@ nanos = terminal_importer.nanos
 
 
 DEFAULT_DATASET = ROOT / "astra/datasets/toolathlon-trajectory"
-SERVICE_NAME = "toolathlon-astra-offline"
+SERVICE_NAME = "toolathlon-offline"
 METADATA_EXPANSIONS = (
     "agent,benchmark,usage,timing,quality,source,trial,message_details,"
     "missing_fields,token_usage_coverage"
@@ -105,30 +106,33 @@ def read_dataset(dataset):
     records = []
     seen = set()
     for tier in ("complete", "partial"):
-        path = dataset / "data" / tier / "astra.jsonl"
-        if not path.is_file():
-            raise ValueError(f"Cleaned split not found: {path}")
-        with path.open(encoding="utf-8") as stream:
-            for line_number, line in enumerate(stream, 1):
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"Invalid JSON at {path}:{line_number}: {exc.msg}") from None
-                if not isinstance(record, dict):
-                    raise ValueError(f"Expected object at {path}:{line_number}")
-                validate_record(record, tier)
-                if record["record_id"] in seen:
-                    raise ValueError(f"Duplicate record_id: {record['record_id']}")
-                seen.add(record["record_id"])
-                records.append(record)
+        split = dataset / "data" / tier
+        paths = sorted(split.glob("*.jsonl"))
+        if not paths:
+            raise ValueError(f"Cleaned split contains no JSONL files: {split}")
+        for path in paths:
+            with path.open(encoding="utf-8") as stream:
+                for line_number, line in enumerate(stream, 1):
+                    if not line.strip():
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(f"Invalid JSON at {path}:{line_number}: {exc.msg}") from None
+                    if not isinstance(record, dict):
+                        raise ValueError(f"Expected object at {path}:{line_number}")
+                    validate_record(record, tier)
+                    if record["record_id"] in seen:
+                        raise ValueError(f"Duplicate record_id: {record['record_id']}")
+                    seen.add(record["record_id"])
+                    records.append(record)
     records.sort(key=lambda record: record["record_id"])
     return records
 
 
 def make_item(record, batch_id):
     task = record["benchmark"]["task_id"]
+    product = record["agent"].get("system_id") or record["agent"].get("name") or "unknown"
     trace_id, span_id, score_id = stable_ids(batch_id, record["record_id"])
     started_at = record["trial"].get("started_at")
     finished_at = record["trial"].get("finished_at")
@@ -143,7 +147,7 @@ def make_item(record, batch_id):
     metadata = {
         "import_batch": batch_id,
         "record_id": record["record_id"],
-        "product": "astra",
+        "product": product,
         "task": task,
         "model": record["agent"].get("model"),
         "attempt_run_id": record["trial"].get("attempt_run_id"),
@@ -185,12 +189,12 @@ def make_item(record, batch_id):
         ],
     }
     attributes = [
-        attr("langfuse.trace.name", f"astra/{task}"),
+        attr("langfuse.trace.name", f"{product}/{task}"),
         attr(
             "langfuse.trace.tags",
             [
                 "toolathlon",
-                "astra",
+                product,
                 record["quality"]["tier"],
                 f"selection:{record['benchmark'].get('selection_kind')}",
                 f"import:{batch_id}",
@@ -207,7 +211,7 @@ def make_item(record, batch_id):
     span = {
         "traceId": trace_id,
         "spanId": span_id,
-        "name": f"astra/{task}",
+        "name": f"{product}/{task}",
         "kind": 1,
         "startTimeUnixNano": start,
         "endTimeUnixNano": end,
@@ -252,7 +256,8 @@ def make_item(record, batch_id):
 def atomic_bundle(path, report, items):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
-    with temporary.open("w", encoding="utf-8") as stream:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(temporary, "wt", encoding="utf-8") as stream:
         stream.write(dump({"report": report}) + "\n")
         for item in items:
             stream.write(dump(item) + "\n")
@@ -285,14 +290,15 @@ def prepare(args):
         ),
         "selected_evaluator_mean_reward": sum(rewards) / len(rewards) if rewards else None,
         "score_name": "runner_reward",
-        "scope": "one selected, evaluator-valid Astra attempt per retained Toolathlon task",
+        "scope": "one selected, evaluator-valid attempt per retained Toolathlon product-task record",
     }
     atomic_bundle(args.output, report, items)
     print(f"Prepared {len(items)} traces and {report['scores']} scores: {args.output}")
 
 
 def read_bundle(path):
-    with path.open(encoding="utf-8") as stream:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8") as stream:
         first = next(stream, None)
         if first is None:
             raise ValueError(f"Empty bundle: {path}")

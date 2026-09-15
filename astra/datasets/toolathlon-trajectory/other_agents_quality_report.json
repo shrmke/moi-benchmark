@@ -1,0 +1,102 @@
+{
+  "generated_at": "2026-09-15T09:40:13.481294+00:00",
+  "schema_version": "toolathlon-trajectory/v1",
+  "products": {
+    "hermes": {
+      "selected": 108,
+      "retained": 108,
+      "complete": 105,
+      "partial": 3,
+      "excluded": 0,
+      "outcomes": {
+        "no_pass": 36,
+        "pass": 72
+      },
+      "partial_reason_counts_nonexclusive": {
+        "missing_terminal": 3
+      },
+      "messages": 11727,
+      "tool_calls": 4848,
+      "excluded_records": []
+    },
+    "pi": {
+      "selected": 107,
+      "retained": 104,
+      "complete": 100,
+      "partial": 4,
+      "excluded": 3,
+      "outcomes": {
+        "no_pass": 27,
+        "pass": 77
+      },
+      "partial_reason_counts_nonexclusive": {
+        "missing_terminal": 4,
+        "unpaired_tool_call": 2
+      },
+      "messages": 6354,
+      "tool_calls": 4031,
+      "excluded_records": [
+        {
+          "record_id": "pi/ipad-edu-price/20260812T105634Z-053-ipad-edu-price-pi-a1",
+          "task": "ipad-edu-price",
+          "attempt_run_id": "20260812T105634Z-053-ipad-edu-price-pi-a1",
+          "selection_kind": "pi_base_108_v1",
+          "selected_status": "unavailable",
+          "source": "astra/results/toolathlon-pi-108-v1/runs/pi/ipad-edu-price/20260812T105634Z-053-ipad-edu-price-pi-a1",
+          "evaluator_source": null,
+          "included": false,
+          "exclusion_reasons": [
+            "invalid_selected_status",
+            "missing_or_invalid_evaluator"
+          ]
+        },
+        {
+          "record_id": "pi/k8s-mysql/20260812T105634Z-055-k8s-mysql-pi-a1",
+          "task": "k8s-mysql",
+          "attempt_run_id": "20260812T105634Z-055-k8s-mysql-pi-a1",
+          "selection_kind": "pi_base_108_v1",
+          "selected_status": "unavailable",
+          "source": "astra/results/toolathlon-pi-108-v1/runs/pi/k8s-mysql/20260812T105634Z-055-k8s-mysql-pi-a1",
+          "evaluator_source": null,
+          "included": false,
+          "exclusion_reasons": [
+            "invalid_selected_status",
+            "missing_or_invalid_evaluator"
+          ]
+        },
+        {
+          "record_id": "pi/nvidia-market/20260812T105634Z-072-nvidia-market-pi-a1",
+          "task": "nvidia-market",
+          "attempt_run_id": "20260812T105634Z-072-nvidia-market-pi-a1",
+          "selection_kind": "pi_base_108_v1",
+          "selected_status": "unavailable",
+          "source": "astra/results/toolathlon-pi-108-v1/runs/pi/nvidia-market/20260812T105634Z-072-nvidia-market-pi-a1",
+          "evaluator_source": null,
+          "included": false,
+          "exclusion_reasons": [
+            "invalid_selected_status",
+            "missing_or_invalid_evaluator"
+          ]
+        }
+      ]
+    },
+    "dsh": {
+      "selected": 108,
+      "retained": 108,
+      "complete": 96,
+      "partial": 12,
+      "excluded": 0,
+      "outcomes": {
+        "no_pass": 29,
+        "pass": 79
+      },
+      "partial_reason_counts_nonexclusive": {
+        "missing_terminal": 12,
+        "no_meaningful_assistant_content": 6
+      },
+      "messages": 6257,
+      "tool_calls": 3892,
+      "excluded_records": []
+    }
+  }
+}

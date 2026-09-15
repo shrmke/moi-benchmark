@@ -1,6 +1,6 @@
-# Astra Toolathlon 轨迹导入 Langfuse
+# Toolathlon 轨迹导入 Langfuse
 
-脚本位于 `astra/datasets/toolathlon-trajectory/scripts/langfuse_import.py`。它只读取 `clean_astra.py` 生成的清洗数据，不修改原始 attempt、Evaluator 结果或正式报告。
+脚本位于 `astra/datasets/toolathlon-trajectory/scripts/langfuse_import.py`。它只读取正式 `data/complete/*.jsonl` 与 `data/partial/*.jsonl` 清洗数据，不修改原始 attempt、Evaluator 结果或正式报告。
 
 ## 数据口径
 
@@ -18,6 +18,7 @@
 ```bash
 cd /home/vagrant/moi-benchmark
 python3 astra/datasets/toolathlon-trajectory/scripts/clean_astra.py
+python3 astra/datasets/toolathlon-trajectory/scripts/clean_other_agents.py
 ```
 
 ## 2. Prepare
@@ -25,10 +26,10 @@ python3 astra/datasets/toolathlon-trajectory/scripts/clean_astra.py
 ```bash
 python3 astra/datasets/toolathlon-trajectory/scripts/langfuse_import.py prepare \
   --dataset astra/datasets/toolathlon-trajectory \
-  --output work/toolathlon-astra-969550b/langfuse/import.jsonl
+  --output astra/datasets/toolathlon-trajectory/langfuse/import.jsonl.gz
 ```
 
-第一行是批次报告，其余每行包含一条 OTLP trace 请求和对应 score 请求。每次 prepare 创建新的 `import_batch`；同一 bundle 中的 trace、observation 和 score ID 是确定的。
+压缩包解压后的第一行是批次报告，其余每行包含一条 OTLP trace 请求和对应 score 请求。每次 prepare 创建新的 `import_batch`；同一 bundle 中的 trace、observation 和 score ID 是确定的。
 
 导入失败时必须复用原 bundle，不要重新 prepare，否则会创建新的分析批次和 ID。
 
@@ -42,7 +43,7 @@ set -a
 set +a
 
 python3 astra/datasets/toolathlon-trajectory/scripts/langfuse_import.py import \
-  --bundle work/toolathlon-astra-969550b/langfuse/import.jsonl
+  --bundle astra/datasets/toolathlon-trajectory/langfuse/import.jsonl.gz
 ```
 
 脚本要求 `LANGFUSE_BASE_URL`、`LANGFUSE_PUBLIC_KEY` 和 `LANGFUSE_SECRET_KEY`。它通过 `/api/public/otel/v1/traces` 上传 observation，通过 `/api/public/scores` 上传评分，并复用现有客户端的限流、5xx 和网络重试策略。认证失败、重定向或 OTLP partial success 不会被当成成功。
@@ -51,7 +52,7 @@ python3 astra/datasets/toolathlon-trajectory/scripts/langfuse_import.py import \
 
 ```bash
 python3 astra/datasets/toolathlon-trajectory/scripts/langfuse_import.py verify \
-  --bundle work/toolathlon-astra-969550b/langfuse/import.jsonl \
+  --bundle astra/datasets/toolathlon-trajectory/langfuse/import.jsonl.gz \
   --api-version v4 \
   --report work/toolathlon-astra-969550b/langfuse/verification.json
 ```
